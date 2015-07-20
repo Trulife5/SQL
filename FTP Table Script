@@ -1,6 +1,4 @@
-/****** Script for SelectTopNRows command from SSMS  ******/
-use p6_Randpaulforpresident_20150331
-go   
+
 
 select * from i_stripe_001
 
