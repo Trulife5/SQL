@@ -1,0 +1,2693 @@
+--use [P7_Boustany_20140214]
+--use [P7_Fitzpatrick_20140214]
+--use [P7_HASAN_20140214]
+--use [P7_LEETERRY_20140214]
+--use [P7_SMITHADRIAN3_20140214]
+--use [P7_BoehnerCopy_20140331]
+use P7_Sample
+--begin tran
+--rollback tran
+--commit
+-----------
+--DONT FORGET TO REPLACE THE SOURCE DB NAME!!!!
+-----------
+declare @dbname nvarchar(50)
+declare @dtb_svr_name nvarchar(100)
+DECLARE @clientGUID uniqueidentifier
+DECLARE @clientName varchar(50)
+
+
+set @dbname=DB_NAME()
+set @dtb_svr_name=@@SERVERNAME
+
+--update cc_sample..tblUser
+--set userguid=newid()
+--********************************************************************************
+--Convert users from BO..tblUser to P7..std_User and related user tables
+--********************************************************************************
+DECLARE @AdminGuid uniqueidentifier
+select top 1 @AdminGuid = usr_guid from std_user where usr_Login = 'TechServices@aristotle.com' and usr_Deleted = 0
+select top 1 @clientGUID = cli_guid from [security7].[dbo].[sec7_Client] where substring(DB_NAME(),charindex('_',DB_NAME(),1)+1,1000) = cli_name
+
+--********************************************************************************
+----------Populating user records as operators in Security..sec7_Operator Table----------
+--********************************************************************************
+INSERT INTO [Security7].[dbo].[sec7_Operator]
+([opr_GUID],[opr_Name],[opr_Password],[opr_active],[opr_IsAdmin],[opr_CreatedOn],[opr_CreatedBy],[opr_updatedon],[opr_updatedby],[opr_Deleted],[opr_cli_GUID],[opr_IsEmailVerified],opr_activationemailedon,opr_firstname,opr_lastname,opr_phone,opr_IsSalesPerson,opr_HasPSAccess)
+select userGUID,oprname,CONVERT(NVARCHAR(40),HASHBYTES('SHA1', [Password]),2),active,0,getdate(),@AdminGuid,editdate,editorguid,0,@clientGUID,1,getdate(),fname,lname,left(phone,15),0,0
+from cc_sample..tblUser
+
+--begin tran
+--********************************************************************************
+----------user_GUID will be similar to sec7_Operator.opr_GUID----------
+--********************************************************************************
+--delete from std_user where usr_guid='00000001-0001-0001-0001-000000000001'
+INSERT INTO [dbo].[std_User]
+([usr_GUID],[usr_Login],[usr_Name],[usr_FirstName],[usr_LastName],[usr_Title],[usr_Description],[usr_Phone],[usr_eMail],[usr_Deleted],[usr_Suspended],
+[usr_CreatedOn],[usr_CreatedBy],usr_updatedon,usr_updatedby,usr_suspendedon,usr_suspendedby,[usr_Config],usr_issystemprocess)
+select userGUID,oprname,ltrim(isnull(Fname,'')+' '+ISNULL(LName,'')),Fname,LName,'','',Phone,Email,0,case active when 1 then 0 else 1 end
+,isnull(CreationDate,getdate()),@AdminGuid,editdate,editorguid,case active when 0 then editdate end, case active when 0 then editorguid end, '',0
+from cc_sample..tblUser
+
+--********************************************************************************
+----------Populating data in std_PermissionGroup table----------
+--********************************************************************************
+INSERT INTO [dbo].[std_PermissionGroup]
+([pgp_GUID],[pgp_Name],[pgp_Deleted],[pgp_CreatedOn],[pgp_CreatedBy])
+select userGUID,oprname,0,isnull(CreationDate,getdate()),@AdminGuid from cc_sample..tblUser
+
+update p7
+set p7.pgp_CreatedBy = isnull(bo.editorguid,@AdminGuid), p7.pgp_updatedby = bo.editorguid, p7.pgp_updatedon = bo.editdate
+from dbo.[std_PermissionGroup] p7
+inner join cc_sample..tblUser bo on bo.userGUID = p7.pgp_guid
+--********************************************************************************
+----------Populating data in std_user_PermissionGroup----------
+--********************************************************************************
+INSERT INTO [dbo].[std_User_PermissionGroup]
+([usr_GUID],[pgp_GUID])
+SELECT userGUID,userGUID from cc_sample..tblUser 
+
+--********************************************************************************
+------------------Populating data in std_Permission---------------------
+--select * from cc_sample..tblUser
+--********************************************************************************
+INSERT INTO [dbo].[std_Permission]
+([prm_GUID],[prm_paa_GUID],[prm_pgp_GUID],[prm_Edit],[prm_Delete],[prm_New],[prm_Read],[prm_Deleted],[prm_CreatedOn],[prm_CreatedBy])
+select NEWID(),paa_guid,userGUID
+	,case [userlevel] when 100 then 1 else 0 end
+	,case [userlevel] when 100 then 0 else 0 end
+	,case [userlevel] when 50 then 1 else 0 end
+	,case [userlevel] when 0 then 1 else 0 end
+	,0,isnull(CreationDate,getdate()),@AdminGuid 
+from cc_sample..tblUser 
+join std_permissionaccessarea on paa_name = 'User Management'
+
+;with worstpermission (usrguid, lvl)
+as
+(
+	--select userguid, userlevelcalendar from cc_sample..tblUser
+	select userguid, userlevelbudget from cc_sample..tblUser
+	union select userguid, userlevelpublic from cc_sample..tblUser
+	union select userguid, userlevelF from cc_sample..tblUser
+	union select userguid, userlevelcontrib from cc_sample..tblUser
+	union select userguid, userlevelexpense from cc_sample..tblUser
+	union select userguid, userlevelpseudoFinancial from cc_sample..tblUser
+	union select userguid, userlevelP from cc_sample..tblUser
+)
+INSERT INTO [dbo].[std_Permission]
+([prm_GUID],[prm_paa_GUID],[prm_pgp_GUID],[prm_Edit],[prm_Delete],[prm_New],[prm_Read],[prm_Deleted],[prm_CreatedOn],[prm_CreatedBy])
+select NEWID(),paa_guid,userGUID
+	,case min(lvl) when 30 then 1 else 0 end
+	,case min(lvl) when 20 then 1 else 0 end
+	,case min(lvl) when 10 then 1 else 0 end
+	,case min(lvl) when 0 then 1 else 0 end
+	,0,isnull(CreationDate,getdate()),@AdminGuid
+from cc_sample..tblUser 
+join std_permissionaccessarea on paa_name = 'Settings'
+join worstpermission on userguid = usrguid
+group by paa_guid, userguid,isnull(CreationDate,getdate())
+
+;with worstpermission (usrguid, lvl)
+as
+(
+	select userguid, userlevelcalendar from cc_sample..tblUser
+	union select userguid, userlevelP from cc_sample..tblUser
+)
+INSERT INTO [dbo].[std_Permission]
+([prm_GUID],[prm_paa_GUID],[prm_pgp_GUID],[prm_Edit],[prm_Delete],[prm_New],[prm_Read],[prm_Deleted],[prm_CreatedOn],[prm_CreatedBy])
+select NEWID(),paa_guid,userGUID
+	,case min(lvl) when 30 then 1 else 0 end
+	,case min(lvl) when 20 then 1 else 0 end
+	,case min(lvl) when 10 then 1 else 0 end
+	,case min(lvl) when 0 then 1 else 0 end
+	,0,isnull(CreationDate,getdate()),@AdminGuid
+from cc_sample..tblUser 
+join std_permissionaccessarea on paa_name = 'Home page'
+join worstpermission on userguid = usrguid
+group by paa_guid, userguid,isnull(CreationDate,getdate())
+
+;with worstpermission (usrguid, lvl)
+as
+(
+	select userguid, userlevelP from cc_sample..tblUser
+	union select userguid, case when exists(select reportinglock from cc_sample..tblfilercommittee where reportinglock=1) 
+									 and userlevel <>100 then 20 else 30 end from cc_sample..tblUser
+)
+INSERT INTO [dbo].[std_Permission]
+([prm_GUID],[prm_paa_GUID],[prm_pgp_GUID],[prm_Edit],[prm_Delete],[prm_New],[prm_Read],[prm_Deleted],[prm_CreatedOn],[prm_CreatedBy])
+select NEWID(),paa_guid,userGUID
+	,case min(lvl) when 30 then 1 else 0 end
+	,case min(lvl) when 20 then 1 else 0 end
+	,case min(lvl) when 10 then 1 else 0 end
+	,case min(lvl) when 0 then 1 else 0 end
+	,0,isnull(CreationDate,getdate()),@AdminGuid
+from cc_sample..tblUser 
+join std_permissionaccessarea on paa_name = 'Contacts'
+join worstpermission on userguid = usrguid
+group by paa_guid, userguid,isnull(CreationDate,getdate())
+
+;with worstpermission (usrguid, lvl)
+as
+(
+	--select userguid, userlevelcalendar from cc_sample..tblUser
+	--select userguid, userlevelbudget from cc_sample..tblUser
+	--union select userguid, userlevelpublic from cc_sample..tblUser
+	select userguid, userlevelF from cc_sample..tblUser
+	union select userguid, userlevelcontrib from cc_sample..tblUser
+	union select userguid, userlevelexpense from cc_sample..tblUser
+	union select userguid, userlevelpseudoFinancial from cc_sample..tblUser
+	--union select userguid, userlevelP from cc_sample..tblUser
+)
+INSERT INTO [dbo].[std_Permission]
+([prm_GUID],[prm_paa_GUID],[prm_pgp_GUID],[prm_Edit],[prm_Delete],[prm_New],[prm_Read],[prm_Deleted],[prm_CreatedOn],[prm_CreatedBy])
+select NEWID(),paa_guid,userGUID
+	,case min(lvl) when 30 then 1 else 0 end
+	,case min(lvl) when 20 then 1 else 0 end
+	,case min(lvl) when 10 then 1 else 0 end
+	,case min(lvl) when 0 then 1 else 0 end
+	,0,isnull(CreationDate,getdate()),@AdminGuid
+from cc_sample..tblUser 
+join std_permissionaccessarea on paa_name = 'Financial'
+join worstpermission on userguid = usrguid
+group by paa_guid, userguid,isnull(CreationDate,getdate())
+
+;with worstpermission (usrguid, lvl)
+as
+(
+	--select userguid, userlevelcalendar from cc_sample..tblUser
+	--select userguid, userlevelbudget from cc_sample..tblUser
+	--union select userguid, userlevelpublic from cc_sample..tblUser
+	select userguid, userlevelFX from cc_sample..tblUser
+	union select userguid, userlevelcontribX from cc_sample..tblUser
+	union select userguid, userlevelexpenseX from cc_sample..tblUser
+	union select userguid, userlevelpseudoFinancialX from cc_sample..tblUser
+	union select userguid, userlevelPX from cc_sample..tblUser
+)
+INSERT INTO [dbo].[std_Permission]
+([prm_GUID],[prm_paa_GUID],[prm_pgp_GUID],[prm_Edit],[prm_Delete],[prm_New],[prm_Read],[prm_Deleted],[prm_CreatedOn],[prm_CreatedBy])
+select NEWID(),paa_guid,userGUID
+	,case min(lvl) when 100 then 1 else 0 end
+	,case min(lvl) when 20 then 1 else 0 end
+	,case min(lvl) when 10 then 1 else 0 end
+	,case min(lvl) when 0 then 1 else 0 end
+	,0,isnull(CreationDate,getdate()),@AdminGuid
+from cc_sample..tblUser 
+join std_permissionaccessarea on paa_name = 'Reports'
+join worstpermission on userguid = usrguid
+group by paa_guid, userguid,isnull(CreationDate,getdate())
+
+;with worstpermission (usrguid, lvl)
+as
+(
+	--select userguid, userlevelcalendar from cc_sample..tblUser
+	--select userguid, userlevelbudget from cc_sample..tblUser
+	--union select userguid, userlevelpublic from cc_sample..tblUser
+	select userguid, userlevelF from cc_sample..tblUser
+	union select userguid, userlevelcontrib from cc_sample..tblUser
+	union select userguid, userlevelexpense from cc_sample..tblUser
+	union select userguid, userlevelpseudoFinancial from cc_sample..tblUser
+	union select userguid, userlevelP from cc_sample..tblUser
+	union select userguid, case when exists(select reportinglock from cc_sample..tblfilercommittee where reportinglock=1) 
+									 and userlevel <>100 then 0 else 30 end from cc_sample..tblUser
+)
+INSERT INTO [dbo].[std_Permission]
+([prm_GUID],[prm_paa_GUID],[prm_pgp_GUID],[prm_Edit],[prm_Delete],[prm_New],[prm_Read],[prm_Deleted],[prm_CreatedOn],[prm_CreatedBy])
+select NEWID(),paa_guid,userGUID
+	,case min(lvl) when 30 then 1 else 0 end
+	,case min(lvl) when 20 then 0 else 0 end
+	,case min(lvl) when 10 then 0 else 0 end
+	,case when min(lvl) <> 30 then 1 else 0 end
+	,0,isnull(CreationDate,getdate()),@AdminGuid
+from cc_sample..tblUser 
+join std_permissionaccessarea on paa_name = 'Merge Records'
+join worstpermission on userguid = usrguid
+group by paa_guid, userguid,isnull(CreationDate,getdate())
+
+;with worstpermission (usrguid, lvl)
+as
+(
+	--select userguid, userlevelcalendar from cc_sample..tblUser
+	--select userguid, userlevelbudget from cc_sample..tblUser
+	--union select userguid, userlevelpublic from cc_sample..tblUser
+	select userguid, userlevelF from cc_sample..tblUser
+	union select userguid, userlevelcontrib from cc_sample..tblUser
+	union select userguid, userlevelexpense from cc_sample..tblUser
+	union select userguid, userlevelpseudoFinancial from cc_sample..tblUser
+	union select userguid, userlevelP from cc_sample..tblUser
+	union select userguid, case when exists(select reportinglock from cc_sample..tblfilercommittee where reportinglock=1) 
+									 and userlevel <>100 then 0 else 30 end from cc_sample..tblUser
+)
+INSERT INTO [dbo].[std_Permission]
+([prm_GUID],[prm_paa_GUID],[prm_pgp_GUID],[prm_Edit],[prm_Delete],[prm_New],[prm_Read],[prm_Deleted],[prm_CreatedOn],[prm_CreatedBy])
+select NEWID(),paa_guid,userGUID
+	,case min(lvl) when 30 then 1 else 0 end
+	,case min(lvl) when 20 then 0 else 0 end
+	,case min(lvl) when 10 then 0 else 0 end
+	,case when min(lvl) <> 30 then 1 else 0 end
+	,0,isnull(CreationDate,getdate()),@AdminGuid
+from cc_sample..tblUser 
+join std_permissionaccessarea on paa_name = 'Compliance'
+join worstpermission on userguid = usrguid
+group by paa_guid, userguid,isnull(CreationDate,getdate())
+
+update p7
+set p7.prm_CreatedBy =isnull(bo.editorguid,@AdminGuid), p7.prm_updatedby = bo.editorguid, p7.prm_updatedon = bo.editdate
+from dbo.[std_Permission] p7
+inner join cc_sample..tblUser bo on bo.userGUID = p7.prm_pgp_guid
+
+------------------------------------------
+--create default widgets on dashboard
+---------------------------------------------
+INSERT INTO std7_UserPreference
+            (upr_GUID,
+             upr_Name,
+             upr_Value,
+             upr_Type,
+             upr_usr_GUID
+			 ,upr_createdby)
+SELECT  NewID(),
+        'Dashboard',
+  '[{"col":1,"row":1,"size_x":2,"size_y":4,"id":"SystemNoticesTableChart"},{"col":3,"row":1,"size_x":4,"size_y":2,"id":"AllCodesBarChart"},{"col":3,"row":3,"size_x":2,"size_y":2,"id":"ExpenseThisYearPieChart"},{"col":5,"row":3,"size_x":2,"size_y":2,"id":"ExpenseThisCyclePieChart"}]'
+      ,
+  'WidgetMVC[]',
+  usr_guid
+  ,@AdminGuid
+from std_user
+where usr_guid not in (select upr_usr_guid from std7_userpreference where upr_type = 'WidgetMVC[]')
+
+--********************************************************************************
+--Populate missing Party records from BO..tblParty table into P7..std_Party
+--********************************************************************************
+update cc_sample..tblparty
+set partyname = 'Democratic' where partyname = 'Democrat'
+
+insert into std_party
+(pty_GUID,pty_Text,pty_Default,pty_Deleted,pty_CreatedOn,pty_CreatedBy,pty_UpdatedOn,pty_UpdatedBy,pty_DeletedOn,pty_DeletedBy,pty_Abbr)
+select 
+ptyguid,partyName,0,0,getdate(),@AdminGuid,NULL,NULL,NULL,NULL,NULL
+from cc_sample..tblParty
+where partyname not in (select distinct pty_text from std_Party where pty_deleted = 0)
+
+--********************************************************************************
+--Populate missing occupation records from BO..tblIndividual.Occupation field into P7..std_Occupation
+--********************************************************************************
+insert into std_occupation
+(occ_guid,occ_Text,occ_Default,occ_Deleted,occ_CreatedOn,occ_CreatedBy)
+select newid(),x.Occupation,0,0,getdate(),@AdminGuid from 
+(select distinct isnull(Occupation,'') occupation from cc_sample..tblIndividual
+where Occupation not in (select distinct occ_Text from std_Occupation where occ_Deleted = 0)) x
+order by x.Occupation
+
+--delete duplicate occuptions
+;with bestocc (occguid, row)
+as (select occ_guid, ROW_NUMBER() OVER (PARTITION BY occ_text
+										order by occ_deleted, occ_default, occ_createdon desc
+										)
+	from std_occupation
+	where occ_Deleted=0
+	)
+update std_occupation
+set occ_Deleted=1, occ_deletedon = getdate(), occ_deletedby = @AdminGuid
+from std_occupation
+join bestocc
+	on occ_guid = occguid and row>1
+
+--********************************************************************************
+--Populate missing ethnicity records from BO..tblEthnicity table into P7..std_ethnicity
+--********************************************************************************
+INSERT INTO [dbo].[std_Ethnicity] ([eth_GUID]            ,[eth_Text]            ,[eth_Default]            ,[eth_Deleted]            ,[eth_CreatedOn]            ,[eth_CreatedBy]            ,[eth_UpdatedOn]            ,[eth_UpdatedBy]            ,[eth_DeletedOn]            ,[eth_DeletedBy])
+     SELECT
+           newid()--(<eth_GUID, uniqueidentifier,>
+           ,EthnicityDescription--<eth_Text, nvarchar(100),>
+           ,0--<eth_Default, bit,>
+           ,0--<eth_Deleted, bit,>
+           ,getdate()--<eth_CreatedOn, datetime,>
+           ,@AdminGuid--<eth_CreatedBy, uniqueidentifier,>
+           ,NULL--<eth_UpdatedOn, datetime,>
+           ,NULL--<eth_UpdatedBy, uniqueidentifier,>
+           ,NULL--<eth_DeletedOn, datetime,>
+           ,NULL--<eth_DeletedBy, uniqueidentifier,>)
+	from cc_sample..tblEthnicity
+	where EthnicityDescription not in (select eth_text from std_ethnicity where eth_deleted=0)
+
+--********************************************************************************
+--Populate BO..tblIndividual into P7..std_Individual
+--********************************************************************************
+declare @Individual uniqueidentifier
+select top 1 @Individual = int_guid from std_IndividualType where int_Text = 'Individual' and int_Deleted = 0
+
+declare @Legislator uniqueidentifier
+select top 1 @Legislator = int_guid from std_IndividualType where int_Text = 'Legislator' and int_Deleted = 0
+
+INSERT INTO [dbo].[std_Prefix]
+           ([pfx_Text]
+           ,[pfx_Default]
+           ,[pfx_Deleted]
+           ,[pfx_CreatedOn]
+           ,[pfx_CreatedBy]
+           ,[pfx_UpdatedOn]
+           ,[pfx_UpdatedBy]
+           ,[pfx_DeletedOn]
+           ,[pfx_DeletedBy])
+     select distinct
+           nametitle--(<pfx_Text, nvarchar(50),>
+           ,0--<pfx_Default, bit,>
+           ,0--<pfx_Deleted, bit,>
+           ,getdate()--<pfx_CreatedOn, datetime,>
+           ,@AdminGuid--<pfx_CreatedBy, uniqueidentifier,>
+           ,null--<pfx_UpdatedOn, datetime,>
+           ,null--<pfx_UpdatedBy, uniqueidentifier,>
+           ,null--<pfx_DeletedOn, datetime,>
+           ,null--<pfx_DeletedBy, uniqueidentifier,>)
+	  FROM cc_sample..tblindividual ti
+	  where nametitle not in (select pfx_text from std_prefix)
+
+set identity_insert std_individual ON
+;with bestrecid (brecid, rw)
+as (
+select recid, row_number() OVER (partition by seq_id, [type]
+								order by recid) rw
+from cc_sample..tblindividual
+join cc_sample..tblrecords
+	on seq_id = individ and [type]=1
+)
+INSERT INTO [dbo].[std_Individual] (ind_reportentityid, [ind_GUID]            ,[ind_Prefix]            ,[ind_FirstName]            ,[ind_MiddleName]            ,[ind_LastName]            ,[ind_Suffix]            ,[ind_ProfSuffix]            ,[ind_Title]            ,[ind_MailName]            ,[ind_Salutation1]            ,[ind_Salutation2]            ,[ind_pty_GUID]            ,[ind_eth_GUID]            ,[ind_rac_GUID]            ,[ind_clo_GUID]            ,[ind_occ_GUID]            ,[ind_og1_GUID]            ,[ind_og2_GUID]            ,[ind_og3_GUID]            ,[ind_Birthdate]            ,[ind_Register]            ,[ind_Gender]            ,[ind_Marital]            ,[ind_VoterId]            ,[ind_SourceID]            ,[ind_HashedID]            ,[ind_Deleted]            ,[ind_Inactive]            ,[ind_CreatedOn]            ,[ind_CreatedBy]            ,[ind_UpdatedOn]            ,[ind_UpdatedBy]            ,[ind_DeletedOn]            ,[ind_DeletedBy]            ,[ind_int_GUID]            ,[ind_API_Id]            ,[ind_Password]            ,[ind_tracking_GUID]            ,[ind_GRPassword]            ,[ind_rgn_GUID]            ,[ind_HasFinancialTransactions]            ,[ind_KnowWhoPeopleID]            ,[ind_RegisteredParty]            ,[ind_LastVoted])
+     select distinct
+			tr.seq_id--ind_reportentityid
+           ,indguid--(<ind_GUID, uniqueidentifier,>
+           ,ltrim(left(isnull(nametitle,''),50))--<ind_Prefix, nvarchar(50),>
+           ,ltrim(left(isnull(FirstName,''),60))--<ind_FirstName, nvarchar(60),>
+           ,ltrim(left(isnull(Middle,''),30))--<ind_MiddleName, nvarchar(30),>
+           ,ltrim(left(isnull(LastName,''),60))--<ind_LastName, nvarchar(60),>
+           ,ltrim(left(isnull(NameSuffix,''),50))--<ind_Suffix, nvarchar(50),>
+           ,NULL--<ind_ProfSuffix, nvarchar(20),>
+           ,NULL--<ind_Title, nvarchar(200),>
+           ,NULL--<ind_MailName, nvarchar(100),>
+           ,ltrim(left(isnull(Salutation,''),100))----<ind_Salutation1, nvarchar(100),>
+           ,NULL--<ind_Salutation2, nvarchar(100),>
+           ,isnull(pty_guid,(select pty_guid from std_party where pty_default=1 and pty_deleted=0))--<ind_pty_GUID, uniqueidentifier,>
+           ,isnull(eth_guid,(select eth_guid from std_ethnicity where eth_default=1 and eth_deleted=0))--<ind_eth_GUID, uniqueidentifier,>
+           ,NULL--<ind_rac_GUID, uniqueidentifier,>
+           ,NULL--<ind_clo_GUID, uniqueidentifier,>
+           ,isnull(occ_guid,(Select occ_guid from std_occupation where occ_default=1 and occ_deleted=0))--<ind_occ_GUID, uniqueidentifier,>
+           ,NULL--<ind_og1_GUID, uniqueidentifier,>
+           ,NULL--<ind_og2_GUID, uniqueidentifier,>
+           ,NULL--<ind_og3_GUID, uniqueidentifier,>
+           ,ti.Birthdate--<ind_Birthdate, datetime,>
+           ,tvi.RegistrationDate--<ind_Register, datetime,>
+           ,CASE ti.gender WHEN 0 THEN '' WHEN 1 THEN 'M' WHEN 2 THEN 'F' ELSE '' END--<ind_Gender, nchar(1),>
+           ,Case when ti.Spouse is not null then 'M' else 'Z' end--<ind_Marital, nchar(1),>
+           ,tvi.RegistrationDate--<ind_VoterId, nvarchar(20),>
+           ,tr.seq_id--<ind_SourceID, nvarchar(50),>
+           ,NULL--<ind_HashedID, nvarchar(50),>
+           ,case ti.active when 0 then 1 else 0 end--<ind_Deleted, bit,>
+           ,case ti.active when -1 then 1 else 0 end--<ind_Inactive, bit,>
+           ,isnull(ti.CreationDate,getdate())--<ind_CreatedOn, datetime,>
+           ,@AdminGuid--<ind_CreatedBy, uniqueidentifier,>
+           ,ti.editdate--<ind_UpdatedOn, datetime,>
+           ,ti.editorguid--<ind_UpdatedBy, uniqueidentifier,>
+           ,case ti.active when 0 then ti.editdate else NULL end--<ind_DeletedOn, datetime,>
+           ,case ti.active when 0 then ti.editorguid else NULL end--<ind_DeletedBy, uniqueidentifier,>
+           ,case ti.Candidate WHEN 1 THEN @Legislator ELSE @Individual END--<ind_int_GUID, uniqueidentifier,>
+           ,NULL--<ind_API_Id, nvarchar(10),>
+           ,NULL--<ind_Password, nvarchar(40),>
+           ,NULL--<ind_tracking_GUID, uniqueidentifier,>
+           ,NULL--<ind_GRPassword, nvarchar(40),>
+           ,NULL--<ind_rgn_GUID, uniqueidentifier,>
+		   ,NULL--<ind_HasFinancialTransactions, bit,>
+           ,NULL--<ind_KnowWhoPeopleID, int,>
+           ,NULL--<ind_RegisteredParty, uniqueidentifier,>
+           ,NULL--<ind_LastVoted, datetime,>)
+	FROM cc_sample..tblindividual ti
+	join cc_sample..tblrecords tr
+		on ti.individ = tr.seq_id and tr.[type] = 1
+	join bestrecid
+		on tr.recid = brecid and rw=1
+	left join cc_sample..tblvoterinfo tvi
+		on tr.recid = tvi.recid
+	left join cc_sample..tblparty tp
+		on tp.partyid = tvi.party
+	left join std_party
+		on pty_text = isnull(tp.PartyName,'')
+	left join cc_sample..tblethnicity te
+		on te.ethnicityid = tvi.ethnicity
+	left join std_ethnicity
+		on eth_text = isnull(te.ethnicitydescription,'')
+	left join std_occupation
+		on occ_text = isnull(ti.occupation,'') and occ_deleted=0
+	
+set identity_insert std_individual off
+
+--********************************************************************************
+--Populate missing IndividualAddressTypes 
+--********************************************************************************
+if not exists (select * from std_IndividualAddressType where iat_Text = 'Home' and iat_Deleted = 0)
+	insert into std_IndividualAddressType
+	(iat_GUID,iat_Text,iat_Default,iat_ImageFilename,iat_ImageType,iat_Image,iat_Deleted,iat_CreatedOn,iat_CreatedBy,iat_DisplayOrder)
+	select newid(),'Home',0,NULL,NULL,NULL,0,getdate(),@AdminGuid,1 
+
+if not exists (select * from std_IndividualAddressType where iat_Text = 'Work' and iat_Deleted = 0)
+	insert into std_IndividualAddressType
+	(iat_GUID,iat_Text,iat_Default,iat_ImageFilename,iat_ImageType,iat_Image,iat_Deleted,iat_CreatedOn,iat_CreatedBy,iat_DisplayOrder)
+	select newid(),'Work',0,NULL,NULL,NULL,0,getdate(),@AdminGuid,1 
+
+if not exists (select * from std_IndividualAddressType where iat_Text = 'Other' and iat_Deleted = 0)
+	insert into std_IndividualAddressType
+	(iat_GUID,iat_Text,iat_Default,iat_ImageFilename,iat_ImageType,iat_Image,iat_Deleted,iat_CreatedOn,iat_CreatedBy,iat_DisplayOrder)
+	select newid(),'Other',0,NULL,NULL,NULL,0,getdate(),@AdminGuid,1 
+
+--********************************************************************************
+--Convert BO..tblAddress related to Individuals into P7..std_IndividualAddress table
+--********************************************************************************
+DECLARE @HomeGUID uniqueidentifier
+select top 1 @HomeGUID = iat_guid from std_IndividualAddressType where iat_Text = 'Home' and iat_Deleted = 0
+
+DECLARE @WorkGUID uniqueidentifier
+select top 1 @WorkGUID = iat_guid from std_IndividualAddressType where iat_Text = 'Work' and iat_Deleted = 0
+
+DECLARE @OtherGUID uniqueidentifier
+select top 1 @OtherGUID = iat_guid from std_IndividualAddressType where iat_Text = 'Other' and iat_Deleted = 0
+
+INSERT INTO [dbo].[std_IndividualAddress]            ([iad_GUID],[iad_ind_GUID],[iad_iat_GUID],[iad_Default],[iad_NotContact],[iad_EvenOdd],[iad_HouseNumber],[iad_HouseNumberSuffix],[iad_PreDirection],[iad_Street],[iad_StreetSuffix],[iad_PostDirection],[iad_RuralRoute],[iad_POBOX],[iad_Line1],[iad_Line2],[iad_Line3],[iad_City],[iad_State],[iad_cry_GUID],[iad_Zip5],[iad_Zip4],[iad_Postal],[iad_Crrt],[iad_DPT],[iad_Tract],[iad_Block],[iad_CountyFips],[iad_County],[iad_Congress],[iad_Senate],[iad_Legislature],[iad_Lat],[iad_Long],[iad_Deleted],[iad_CreatedOn],[iad_CreatedBy],[iad_UpdatedOn],[iad_UpdatedBy],[iad_DeletedOn],[iad_DeletedBy],[iad_Line1_std],[iad_Line2_std],[iad_Line3_std],[iad_PrecinctCode],[iad_PrecinctName],[iad_Ward],[iad_LineOfTravelSeq],[iad_LineOfTravelOrder],[iad_Standardized],[iad_City_std],[iad_State_std])
+	SELECT
+           newid()--<iad_GUID, uniqueidentifier,>
+           ,ind.indguid--<iad_ind_GUID, uniqueidentifier,>
+           ,CASE addr.Descr	WHEN 1 THEN @HomeGUID	WHEN 2 THEN @WorkGUID	ELSE @OtherGUID END--<iad_iat_GUID, uniqueidentifier,>
+           ,case primaryaddress when 1 then 1 else 0 end--<iad_Default, bit,>
+           ,0--<iad_NotContact, bit,>
+           ,NULL--<iad_EvenOdd, nchar(1),>
+           ,NULL--<iad_HouseNumber, nvarchar(10),>
+           ,NULL--<iad_HouseNumberSuffix, nvarchar(10),>
+           ,NULL--<iad_PreDirection, nchar(2),>
+           ,NULL--<iad_Street, nvarchar(30),>
+           ,NULL--<iad_StreetSuffix, nchar(4),>
+           ,NULL--<iad_PostDirection, nchar(2),>
+           ,NULL--<iad_RuralRoute, nvarchar(30),>
+           ,NULL--<iad_POBOX, nvarchar(10),>
+           ,LEFT(ltrim(isnull(addr.adr1,'')),50)--<iad_Line1, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.adr2,'')),50)--<iad_Line2, nvarchar(50),>
+           ,''--<iad_Line3, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.city,'')),50)--<iad_City, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.state,'')),2)--<iad_State, nvarchar(2),>
+           ,'00000000-0000-0000-0000-000000000000'--<iad_cry_GUID, uniqueidentifier,>
+           ,case when isnull(zip,'')>'' and len(ltrim(rtrim(zip)))<5
+						then right(replicate('0',5)+ltrim(isnull(rtrim([zip]),'')),5)
+					when isnull(zip,'')>'' and len(ltrim(zip)) in (9,10)
+						then left(ltrim(isnull(zip,'')),5)
+					else left(ltrim(isnull(zip,'')),10) end--<iad_Zip5, nvarchar(10),>
+           ,case when isnull(zip,'')>'' and len(zip)<5
+						then ''
+					when isnull(zip,'')>'' and len(zip) in (9,10)
+						then right(rtrim(zip),4)
+					else '' end--<iad_Zip4, nvarchar(4),>
+           ,NULL--<iad_Postal, nvarchar(10),>
+           ,left(ltrim(carrierroute),4)--<iad_Crrt, nvarchar(4),>
+           ,null--<iad_DPT, nvarchar(3),>
+           ,null--<iad_Tract, nvarchar(6),>
+           ,null--<iad_Block, nvarchar(4),>
+           ,null--<iad_CountyFips, nchar(3),>
+           ,left(ltrim(county),50)--<iad_County, nvarchar(50),>
+           ,left(ltrim(congdist),2)--<iad_Congress, nchar(2),>
+           ,left(ltrim(addr.statesenate),10)--<iad_Senate, nvarchar(10),>
+           ,left(ltrim(statehouse),10)--<iad_Legislature, nvarchar(10),>
+           ,null--<iad_Lat, float,>
+           ,null--<iad_Long, float,>
+           ,0--<iad_Deleted, bit,>
+           ,isnull(addr.CreationDate,getdate())--<iad_CreatedOn, datetime,>
+           ,@AdminGuid--<iad_CreatedBy, uniqueidentifier,>
+           ,addr.editdate--<iad_UpdatedOn, datetime,>
+           ,usr.userguid--<iad_UpdatedBy, uniqueidentifier,>
+           ,null--<iad_DeletedOn, datetime,>
+           ,null--<iad_DeletedBy, uniqueidentifier,>
+           ,null--<iad_Line1_std, nvarchar(100),>
+           ,null--<iad_Line2_std, nvarchar(100),>
+           ,null--<iad_Line3_std, nvarchar(100),>
+           ,null--<iad_PrecinctCode, nvarchar(20),>
+           ,case when primaryaddress=1 then isnull(precinct,'') else '' end--<iad_PrecinctName, nvarchar(100),>
+           ,null--<iad_Ward, nvarchar(20),>
+           ,null--<iad_LineOfTravelSeq, nvarchar(6),>
+           ,null--<iad_LineOfTravelOrder, nvarchar(100),>
+           ,case autocorrect when 0 then 0 else null end--<iad_Standardized, bit,>
+           ,null--<iad_City_std, nvarchar(50),>
+           ,null--<iad_State_std, nvarchar(2),>)
+		FROM cc_sample.dbo.[tblAddress] addr
+		INNER JOIN cc_sample.dbo.tblRecords rec on rec.RecID = addr.RecID AND rec.Type = 1 
+		INNER JOIN cc_sample.dbo.tblIndividual ind on ind.IndivID = rec.Seq_ID
+		left join cc_sample.dbo.tblvoterinfo tvi on rec.recid = tvi.recid
+		left JOIN cc_sample.dbo.tblUser usr on usr.UserID = addr.editor
+
+DECLARE @MailGUID uniqueidentifier
+select top 1 @MailGUID = iat_guid from std_IndividualAddressType where iat_Text = 'Mail' and iat_Deleted = 0
+
+INSERT INTO [dbo].[std_IndividualAddress]            ([iad_GUID],[iad_ind_GUID],[iad_iat_GUID],[iad_Default],[iad_NotContact],[iad_EvenOdd],[iad_HouseNumber],[iad_HouseNumberSuffix],[iad_PreDirection],[iad_Street],[iad_StreetSuffix],[iad_PostDirection],[iad_RuralRoute],[iad_POBOX],[iad_Line1],[iad_Line2],[iad_Line3],[iad_City],[iad_State],[iad_cry_GUID],[iad_Zip5],[iad_Zip4],[iad_Postal],[iad_Crrt],[iad_DPT],[iad_Tract],[iad_Block],[iad_CountyFips],[iad_County],[iad_Congress],[iad_Senate],[iad_Legislature],[iad_Lat],[iad_Long],[iad_Deleted],[iad_CreatedOn],[iad_CreatedBy],[iad_UpdatedOn],[iad_UpdatedBy],[iad_DeletedOn],[iad_DeletedBy],[iad_Line1_std],[iad_Line2_std],[iad_Line3_std],[iad_PrecinctCode],[iad_PrecinctName],[iad_Ward],[iad_LineOfTravelSeq],[iad_LineOfTravelOrder],[iad_Standardized],[iad_City_std],[iad_State_std])
+	SELECT
+           addr.adrguid--<iad_GUID, uniqueidentifier,>
+           ,ind.indguid--<iad_ind_GUID, uniqueidentifier,>
+           ,@MailGuid--<iad_iat_GUID, uniqueidentifier,>
+           ,0--<iad_Default, bit,>
+           ,0--<iad_NotContact, bit,>
+           ,NULL--<iad_EvenOdd, nchar(1),>
+           ,NULL--<iad_HouseNumber, nvarchar(10),>
+           ,NULL--<iad_HouseNumberSuffix, nvarchar(10),>
+           ,NULL--<iad_PreDirection, nchar(2),>
+           ,NULL--<iad_Street, nvarchar(30),>
+           ,NULL--<iad_StreetSuffix, nchar(4),>
+           ,NULL--<iad_PostDirection, nchar(2),>
+           ,NULL--<iad_RuralRoute, nvarchar(30),>
+           ,NULL--<iad_POBOX, nvarchar(10),>
+           ,LEFT(ltrim(isnull(addr.adr1,'')),50)--<iad_Line1, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.adr2,'')),50)--<iad_Line2, nvarchar(50),>
+           ,''--<iad_Line3, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.city,'')),50)--<iad_City, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.state,'')),2)--<iad_State, nvarchar(2),>
+           ,'00000000-0000-0000-0000-000000000000'--<iad_cry_GUID, uniqueidentifier,>
+           ,case when isnull(zip,'')>'' and len(ltrim(rtrim(zip)))<5
+						then right(replicate('0',5)+ltrim(isnull(rtrim([zip]),'')),5)
+					when isnull(zip,'')>'' and len(ltrim(zip)) in (9,10)
+						then left(ltrim(isnull(zip,'')),5)
+					else left(ltrim(isnull(zip,'')),10) end--<iad_Zip5, nvarchar(10),>
+           ,case when isnull(zip,'')>'' and len(zip)<5
+						then ''
+					when isnull(zip,'')>'' and len(zip) in (9,10)
+						then right(rtrim(zip),4)
+					else '' end--<iad_Zip4, nvarchar(4),>
+           ,NULL--<iad_Postal, nvarchar(10),>
+           ,left(ltrim(carrierroute),4)--<iad_Crrt, nvarchar(4),>
+           ,null--<iad_DPT, nvarchar(3),>
+           ,null--<iad_Tract, nvarchar(6),>
+           ,null--<iad_Block, nvarchar(4),>
+           ,null--<iad_CountyFips, nchar(3),>
+           ,left(ltrim(county),50)--<iad_County, nvarchar(50),>
+           ,left(ltrim(congdist),2)--<iad_Congress, nchar(2),>
+           ,left(ltrim(addr.statesenate),10)--<iad_Senate, nvarchar(10),>
+           ,left(ltrim(statehouse),10)--<iad_Legislature, nvarchar(10),>
+           ,null--<iad_Lat, float,>
+           ,null--<iad_Long, float,>
+           ,0--<iad_Deleted, bit,>
+           ,isnull(addr.CreationDate,getdate())--<iad_CreatedOn, datetime,>
+           ,@AdminGuid--<iad_CreatedBy, uniqueidentifier,>
+           ,addr.editdate--<iad_UpdatedOn, datetime,>
+           ,usr.userguid--<iad_UpdatedBy, uniqueidentifier,>
+           ,null--<iad_DeletedOn, datetime,>
+           ,null--<iad_DeletedBy, uniqueidentifier,>
+           ,null--<iad_Line1_std, nvarchar(100),>
+           ,null--<iad_Line2_std, nvarchar(100),>
+           ,null--<iad_Line3_std, nvarchar(100),>
+           ,null--<iad_PrecinctCode, nvarchar(20),>
+           ,case when primaryaddress=1 then isnull(precinct,'') else '' end--<iad_PrecinctName, nvarchar(100),>
+           ,null--<iad_Ward, nvarchar(20),>
+           ,null--<iad_LineOfTravelSeq, nvarchar(6),>
+           ,null--<iad_LineOfTravelOrder, nvarchar(100),>
+           ,case autocorrect when 0 then 0 else null end--<iad_Standardized, bit,>
+           ,null--<iad_City_std, nvarchar(50),>
+           ,null--<iad_State_std, nvarchar(2),>)
+		FROM cc_sample.dbo.[tblAddress] addr
+		INNER JOIN cc_sample.dbo.tblRecords rec on rec.RecID = addr.RecID AND rec.Type = 1 
+		INNER JOIN cc_sample.dbo.tblIndividual ind on ind.IndivID = rec.Seq_ID
+		left join cc_sample.dbo.tblvoterinfo tvi on rec.recid = tvi.recid
+		left JOIN cc_sample.dbo.tblUser usr on usr.UserID = addr.editor
+		where mailingaddress=1
+
+--********************************************************************************
+--Convert spouse into std_individualhousehold / std_household
+--********************************************************************************
+
+INSERT INTO [dbo].[std_Household]
+           ([hou_GUID]            ,[hou_MailName]            ,[hou_Salutation]            ,[hou_pty_GUID]            ,[hou_ExtraInfo]            ,[hou_Deleted]            ,[hou_CreatedOn]            ,[hou_CreatedBy]            ,[hou_UpdatedOn]            ,[hou_UpdatedBy]            ,[hou_DeletedOn]            ,[hou_DeletedBy])
+     SELECT
+           tce.houguid--(<hou_GUID, uniqueidentifier,>
+           ,tce.Mailname--<hou_MailName, nvarchar(100),>
+           ,tce.Salutation--<hou_Salutation, nvarchar(100),>
+           ,pty_guid--<hou_pty_GUID, uniqueidentifier,>
+           ,'NA'--<hou_ExtraInfo, nvarchar(2000),>
+           ,0--<hou_Deleted, bit,>
+           ,isnull(tce.CreationDate,'')--<hou_CreatedOn, datetime,>
+           ,@AdminGuid--<hou_CreatedBy, uniqueidentifier,>
+           ,tce.editdate--<hou_UpdatedOn, datetime,>
+           ,editor.userguid--<hou_UpdatedBy, uniqueidentifier,>
+           ,null--<hou_DeletedOn, datetime,>
+           ,null--<hou_DeletedBy, uniqueidentifier,>)
+	from cc_sample.dbo.tblcouplemail tce
+	left JOIN cc_sample.dbo.tblUser editor on editor.UserID = tce.editor
+	join std_party on  pty_deleted=0 and pty_default=1
+
+
+INSERT INTO [dbo].[std_Individual_Household]
+           ([lih_GUID]            ,[lih_ind_GUID]            ,[lih_hou_GUID]            ,[lih_hom_GUID]            ,[lih_HOH]            ,[lih_ManualHOH]            ,[lih_Deleted]            ,[lih_CreatedOn]            ,[lih_CreatedBy]            ,[lih_UpdatedOn]            ,[lih_UpdatedBy]            ,[lih_DeletedOn]            ,[lih_DeletedBy])
+     SELECT
+           newid()--(<lih_GUID, uniqueidentifier,>
+           ,indguid--<lih_ind_GUID, uniqueidentifier,>
+           ,houguid--<lih_hou_GUID, uniqueidentifier,>
+           ,hom_guid--<lih_hom_GUID, uniqueidentifier,>
+           ,case when tr1.seq_id = i.individ then 1 else 0 end--<lih_HOH, bit,>
+           ,0--<lih_ManualHOH, bit,>
+           ,0--<lih_Deleted, bit,>
+           ,isnull(tce.CreationDate,'')--<lih_CreatedOn, datetime,>
+           ,@AdminGuid--<lih_CreatedBy, uniqueidentifier,>
+           ,tce.editdate--<lih_UpdatedOn, datetime,>
+           ,editor.userguid--<lih_UpdatedBy, uniqueidentifier,>
+           ,null--<lih_DeletedOn, datetime,>
+           ,null--<lih_DeletedBy, uniqueidentifier,>)
+	from cc_sample.dbo.tblIndividual i 
+	join cc_sample.dbo.tblrecords tr1
+		on (i.individ = tr1.Seq_ID and tr1.type = 1) or (i.spouse = tr1.Seq_ID and tr1.type=1)
+	join cc_sample.dbo.tblcouplemail tce
+		on tr1.recid = indivrecid
+	left JOIN cc_sample.dbo.tblUser editor on editor.UserID = tce.editor
+	join std_HouseholdMember
+		on hom_deleted=0 and hom_text = 'Spouse'
+	where i.spouse>0
+
+INSERT INTO [dbo].[std_EntityLink_Individual]
+           ([eli_GUID]            ,[eli_ind_GUID]            ,[eli_elt_GUID]            ,[eli_lnk_GUID]            ,[eli_Deleted]            ,[eli_CreatedOn]            ,[eli_CreatedBy]            ,[eli_UpdatedOn]            ,[eli_UpdatedBy]            ,[eli_DeletedOn]            ,[eli_DeletedBy]            ,[eli_isPrimary])
+	SELECT
+           newid()--(<eli_GUID, uniqueidentifier,>
+           ,i.indguid--<eli_ind_GUID, uniqueidentifier,>
+           ,case when tr1.seq_id = i.individ then elp_fromlinktype_guid else elp_tolinktype_guid end--<eli_elt_GUID, uniqueidentifier,>
+           ,tce.houguid--<eli_lnk_GUID, uniqueidentifier,>
+           ,0--<eli_Deleted, bit,>
+           ,isnull(tce.creationdate,getdate())--<eli_CreatedOn, datetime,>
+           ,@AdminGuid--<eli_CreatedBy, uniqueidentifier,>
+           ,tce.editdate--<eli_UpdatedOn, datetime,>
+           ,usr.userguid--<eli_UpdatedBy, uniqueidentifier,>
+           ,null--<eli_DeletedOn, datetime,>
+           ,null--<eli_DeletedBy, uniqueidentifier,>
+           ,0--<eli_isPrimary, bit,>)
+	from cc_sample.dbo.tblIndividual i 
+	join cc_sample.dbo.tblrecords tr1
+		on (i.individ = tr1.Seq_ID and tr1.type = 1) or (i.spouse = tr1.Seq_ID and tr1.type=1)
+	join cc_sample.dbo.tblcouplemail tce
+		on tr1.recid = indivrecid
+	join [std_EntityLinkType]
+		on elt_text = 'Spouse' and elt_deleted=0
+	join [std_EntityLinkTypegroup]
+		on elg_text = 'Internal Default Group' and elg_deleted=0 and elt_elg_guid = elg_guid
+	join [std7_EntityLinkPair]
+		on elp_fromlinktype_guid=elt_guid
+	left join cc_sample..tbluser usr
+		on usr.userid = tce.editor
+
+--********************************************************************************
+--Convert individual's email data from BO..tblEmail to individualemail
+--********************************************************************************
+insert into std_IndividualeMail
+(ema_GUID, ema_ind_GUID, ema_Email, 
+ema_emt_GUID, 
+ema_ems_GUID, 
+ema_Default, ema_NotContact, ema_Deleted, ema_CreatedOn, ema_CreatedBy, ema_UpdatedOn, ema_UpdatedBy, 
+ema_DeletedOn, ema_DeletedBy, ema_TextOnly)
+SELECT        
+ema.emaGUID, ind.indGUID, ema.EMail, 
+(select top 1 emt_guid from std_Individualemailtype where emt_text = 'Personal' and emt_deleted = 0), 
+(select top 1 ems_guid from std_Individualemailstatus where ems_text = 'Active' and ems_deleted = 0), 
+ema.PrimaryEmail, 0, 0, isnull(ema.CreationDate,getdate()), @AdminGuid, ema.editdate, usr.editorGUID, 
+NULL, NULL, 0
+FROM cc_sample.dbo.tblEmail ema
+INNER JOIN cc_sample.dbo.tblRecords rec on rec.RecID = ema.RecID AND rec.Type = 1 
+INNER JOIN cc_sample.dbo.tblIndividual ind on ind.IndivID = rec.Seq_ID
+	--and ind.indGUID in (select ind_guid from std_Individual where ind_Deleted = 0)
+left JOIN cc_sample.dbo.tblUser usr on usr.UserID = ema.editor
+
+--********************************************************************************
+--Convert individual phone data from BO..tblPhone to P7..std_Phone
+--PhoneTypes is based tblPhone.Uses field
+--If it is 1 = Home, 2 = Work, 3 = Fax, 4 = Mobile and 5 = Other
+--********************************************************************************
+insert std_phonetype
+select newid(),'Home',0,0,getdate(),@AdminGuid,NULL,NULL,NULL,NULL,0,
+(select max(pht_displayorder)+1 from std_phonetype where pht_deleted=0)
+where 'Home' not in (select pht_text from std_phonetype where pht_deleted=0)
+insert std_phonetype
+select newid(),'Work',0,0,getdate(),@AdminGuid,NULL,NULL,NULL,NULL,0,
+(select max(pht_displayorder)+1 from std_phonetype where pht_deleted=0)
+where 'Work' not in (select pht_text from std_phonetype where pht_deleted=0)
+insert std_phonetype
+select newid(),'Fax',0,0,getdate(),@AdminGuid,NULL,NULL,NULL,NULL,0,
+(select max(pht_displayorder)+1 from std_phonetype where pht_deleted=0)
+where 'fax' not in (select pht_text from std_phonetype where pht_deleted=0)
+insert std_phonetype
+select newid(),'Mobile',0,0,getdate(),@AdminGuid,NULL,NULL,NULL,NULL,0,
+(select max(pht_displayorder)+1 from std_phonetype where pht_deleted=0)
+where 'Mobile' not in (select pht_text from std_phonetype where pht_deleted=0)
+insert std_phonetype
+select newid(),'Other',0,0,getdate(),@AdminGuid,NULL,NULL,NULL,NULL,0,
+(select max(pht_displayorder)+1 from std_phonetype where pht_deleted=0)
+where 'Other' not in (select pht_text from std_phonetype where pht_deleted=0)
+
+insert into std_Phone
+(pho_GUID, pho_ind_GUID, pho_Number, pho_Extension, 
+pho_pht_GUID, 
+pho_NotContact, pho_Deleted, 
+pho_CreatedOn, pho_CreatedBy, pho_UpdatedOn, pho_UpdatedBy, pho_DeletedOn, pho_DeletedBy, 
+pho_Default, pho_phc_GUID, pho_SMSOptIn)
+SELECT        
+pho.phoGUID, ind.indGUID, cc_sample.[dbo].[RemoveNonAlphaNumericCharacters](pho.Area)+cc_sample.[dbo].[RemoveNonAlphaNumericCharacters](pho.Phone), left(ltrim(pho.Ext),5), 
+case 
+	when pho.uses = 1 then (select top 1 pht_guid from std_PhoneType where pht_Text = 'Home' and pht_Deleted = 0)
+	when pho.uses = 2 then (select top 1 pht_guid from std_PhoneType where pht_Text = 'Work' and pht_Deleted = 0)
+	when pho.uses = 3 then (select top 1 pht_guid from std_PhoneType where pht_Text = 'Fax' and pht_Deleted = 0)
+	when pho.uses = 4 then (select top 1 pht_guid from std_PhoneType where pht_Text = 'Mobile' and pht_Deleted = 0)
+	when pho.uses = 5 then (select top 1 pht_guid from std_PhoneType where pht_Text = 'Other' and pht_Deleted = 0)
+end, 
+0, 0, 
+isnull(pho.CreationDate,getdate()), @AdminGuid, pho.editdate, pho.editorguid, NULL, NULL, 
+0, NULL, 0
+FROM cc_sample.dbo.tblPhone pho
+INNER JOIN cc_sample.dbo.tblRecords rec on rec.RecID = pho.RecID AND rec.Type = 1 
+INNER JOIN cc_sample.dbo.tblIndividual ind on ind.IndivID = rec.Seq_ID
+	--and ind.indGUID in (select ind_guid from std_Individual where ind_Deleted = 0)
+
+--********************************************************************************
+--Convert data from BO..tblOrganization to P7..std_Company
+--********************************************************************************
+INSERT INTO [dbo].[std_Company]
+           ([cmp_GUID]            ,[cmp_Name]            ,[cmp_cmt_GUID]            ,[cmp_Deleted]            ,[cmp_CreatedOn]            ,[cmp_CreatedBy]            ,[cmp_UpdatedOn]            ,[cmp_UpdatedBy]            ,[cmp_DeletedOn]            ,[cmp_DeletedBy]            ,[cmp_Active]            ,[cmp_idu_GUID]            ,[cmp_HasFinancialTransactions]            ,[cmp_Bank]            ,[cmp_URL]            ,[cmp_TaxId]            ,[cmp_Description]            ,[cmp_SourceID])
+     SELECT
+           org.orgguid--(<cmp_GUID, uniqueidentifier,>
+           ,org.orgname--<cmp_Name, nvarchar(250),>
+           ,(select top 1 cmt_guid from std_companytype where cmt_deleted=0 order by case when cmt_text='Bank' and org.bank=1 then 1
+																						  when cmt_text='Bank/Lender' and org.bank=1 then 2
+																						  when cmt_text='' then 3
+																						  else 4 end)--<cmp_cmt_GUID, uniqueidentifier,>
+           ,case when org.active = 0 then 1 when org.committee=1 then 1 else 0 end--<cmp_Deleted, bit,>
+           ,isnull(org.CreationDate,getdate())--<cmp_CreatedOn, datetime,>
+           ,@AdminGuid--<cmp_CreatedBy, uniqueidentifier,>
+           ,org.editdate--<cmp_UpdatedOn, datetime,>
+           ,org.editorGUID--<cmp_UpdatedBy, uniqueidentifier,>
+           ,case when org.active = 0 then org.editdate when org.committee=1 then getdate() else null end--[pcm_DeletedOn] [datetime] NULL,
+		   ,case when org.active = 0 then org.editorguid when org.committee=1 then @AdminGuid else null end--case<cmp_DeletedOn, datetime,>
+           ,case org.active when -1 then 0 else 1 end--<cmp_Active, bit,>
+           ,NULL--<cmp_idu_GUID, uniqueidentifier,>
+           ,null--<cmp_HasFinancialTransactions, bit,>
+           ,org.bank--<cmp_Bank, bit,>
+           ,org.WebURL--<cmp_URL, nvarchar(500),>
+           ,org.EIN--<cmp_TaxId, nvarchar(50),>
+           ,org.OrgDescr--<cmp_Description, nvarchar(max),>
+           ,rec.recid--<cmp_SourceID, nvarchar(50),>)
+from cc_sample..tblOrganization org 
+join cc_sample..tblrecords rec on rec.seq_id = org.orgid and rec.type = 2
+
+--********************************************************************************
+--Populate missing PoliticalCommitteeTypes
+--********************************************************************************
+--INSERT INTO std_PoliticalCommitteeType 
+--(pct_guid, pct_text, pct_Deleted, pct_CreatedOn, pct_CreatedBy, pct_Default, pct_DisplayOrder)
+--select newid(),TypeText,0,getdate(),@AdminGuid,0,0
+--from cc_sample..tblCommitteeLookup tcl
+--where typetext not in (select distinct pct_text from std_PoliticalCommitteeType)
+--	and tcl.typeid in (select distinct tc.committeetype from cc_sample.dbo.tblcommittee tc)
+
+insert std7_activitylevel (acl_guid, acl_text, acl_deleted, acl_createdon, acl_createdby, acl_default)
+select newid(), '', 0,getdate(), @AdminGuid,1
+where '' not in (select acl_text from std7_activitylevel where acl_Deleted=0)
+
+update std7_activitylevel set acl_Default=0 where acl_text <> '' and acl_default=1
+
+--********************************************************************************
+--Convert data from BO..tblCommittee to P7..std_PoliticalCommittee
+--********************************************************************************
+delete from std_account where acc_createdby = '00000000-0000-0000-0000-000000000000'
+delete from std_politicalcommittee_compliancereportauthority 
+	where lpc_pcm_guid in (select pcm_guid from std_politicalcommittee where pcm_createdby = '00000000-0000-0000-0000-000000000000' and pcm_isfilingcommittee=1)
+delete from std_politicalcommittee where pcm_createdby = '00000000-0000-0000-0000-000000000000' and pcm_isfilingcommittee=1
+--step 1 - create a copy of std_politicalcommittee table to hold all records including duplicates #std_politicalcommitteeTemp
+create table #std_PoliticalCommitteeTemp
+(
+	[pcm_GUID] [uniqueidentifier] NOT NULL,
+	[pcm_RegId] [nvarchar](20) NULL,
+	[pcm_Name] [nvarchar](100) NOT NULL,
+	[pcm_Address1] [nvarchar](50) NULL,
+	[pcm_Address2] [nvarchar](50) NULL,
+	[pcm_Address3] [nvarchar](50) NULL,
+	[pcm_City] [nvarchar](50) NULL,
+	[pcm_State] [nchar](2) NULL,
+	[pcm_Zip5] [nvarchar](10) NULL,
+	[pcm_Zip4] [nchar](4) NULL,
+	[pcm_Postal] [nvarchar](10) NULL,
+	[pcm_Contact] [nvarchar](100) NULL,
+	[pcm_Phone] [nvarchar](20) NULL,
+	[pcm_eMail] [nvarchar](100) NULL,
+	[pcm_URL] [nvarchar](100) NULL,
+	[pcm_pty_GUID] [uniqueidentifier] NULL,
+	[pcm_pct_GUID] [uniqueidentifier] NULL,
+	[pcm_Deleted] [bit] NOT NULL,
+	[pcm_Inactive] [bit] NULL,
+	[pcm_CreatedOn] [datetime] NOT NULL,
+	[pcm_CreatedBy] [uniqueidentifier] NOT NULL,
+	[pcm_UpdatedOn] [datetime] NULL,
+	[pcm_UpdatedBy] [uniqueidentifier] NULL,
+	[pcm_DeletedOn] [datetime] NULL,
+	[pcm_DeletedBy] [uniqueidentifier] NULL,
+	[pcm_SourceId] [nvarchar](100) NULL,
+	[pcm_FAX] [nvarchar](40) NULL,
+	[pcm_IsFilingCommittee] [bit] NULL,
+	[pcm_ReceiptLimit] [money] NULL,
+	[pcm_DisbursementLimit] [money] NULL,
+	[pcm_Active] [bit] NULL,
+	[pcm_CountyFips] [nchar](6) NULL,
+	[pcm_County] [nvarchar](100) NULL,
+	[pcm_AltAddress1] [nvarchar](100) NULL,
+	[pcm_AltAddress2] [nvarchar](100) NULL,
+	[pcm_AltAddress3] [nvarchar](100) NULL,
+	[pcm_AltCity] [nvarchar](60) NULL,
+	[pcm_AltState] [nchar](4) NULL,
+	[pcm_AltZip5] [nchar](10) NULL,
+	[pcm_AltZip4] [nchar](8) NULL,
+	[pcm_AltPostal] [nvarchar](20) NULL,
+	[pcm_AltCountyFips] [nvarchar](6) NULL,
+	[pcm_AltCounty] [nvarchar](100) NULL,
+	[pcm_AltContact] [nvarchar](200) NULL,
+	[pcm_AltPhone] [nvarchar](40) NULL,
+	[pcm_AltFAX] [nvarchar](40) NULL,
+	[pcm_AlteMail] [nvarchar](200) NULL,
+	[pcm_AltURL] [nvarchar](200) NULL,
+	[pcm_DefaultFilingCommittee] [bit] NULL,
+	[pcm_Acronym] [nvarchar](100) NULL,
+	[pcm_Order] [int] NULL,
+	[pcm_HasFinancialTransactions] [bit] NULL,
+	[pcm_ReportEntityID] [int] IDENTITY(1,1) NOT NULL,
+	[pcm_reg_GUID] [uniqueidentifier] NULL,
+	[pcm_por_GUID] [uniqueidentifier] NULL,
+	[pcm_clt_GUID] [uniqueidentifier] NULL,
+	[pcm_acl_GUID] [uniqueidentifier] NULL,
+	[pcm_FormationDate] [datetime] NULL,
+	[pcm_Qualified] [bit] NULL,
+	[pcm_QualifiedDate] [datetime] NULL,
+	[pcm_SCC] [bit] NULL,
+	[pcm_SCCDate] [datetime] NULL,
+	[pcm_CompanyCode] [int] NULL,
+	[pcm_AllowOverLimit] [bit] NULL,
+	[pcm_Standardized] [bit] NULL,
+	[pcm_Bank] [bit] NULL,
+	[pcm_TaxId] [nvarchar](50) NULL,
+	[pcm_Description] [nvarchar](max) NULL,
+ ) 
+
+--step 2 - populate data into #std_politicalcommitteeTemp table
+INSERT INTO #std_PoliticalCommitteeTemp
+(
+	   [pcm_GUID]       ,[pcm_RegId]       ,[pcm_Name]       ,[pcm_Address1]       ,[pcm_Address2]       ,[pcm_Address3]       ,[pcm_City]       ,[pcm_State]       
+	   ,[pcm_Zip5]       ,[pcm_Zip4]       ,[pcm_Postal]       ,[pcm_Contact]       ,[pcm_Phone]       ,[pcm_eMail]       ,[pcm_URL]       ,[pcm_pty_GUID]     
+	     ,[pcm_pct_GUID]       ,[pcm_Deleted]       ,[pcm_Inactive]       ,[pcm_CreatedOn]       ,[pcm_CreatedBy]       ,[pcm_UpdatedOn]       ,[pcm_UpdatedBy]       
+		 ,[pcm_DeletedOn]       ,[pcm_DeletedBy]       ,[pcm_SourceId]       ,[pcm_FAX]       ,[pcm_IsFilingCommittee]       ,[pcm_ReceiptLimit]       ,[pcm_DisbursementLimit]       
+		 ,[pcm_Active]       ,[pcm_CountyFips]       ,[pcm_County]       ,[pcm_AltAddress1]       ,[pcm_AltAddress2]       ,[pcm_AltAddress3]       ,[pcm_AltCity]       ,[pcm_AltState]      
+		  ,[pcm_AltZip5]       ,[pcm_AltZip4]       ,[pcm_AltPostal]       ,[pcm_AltCountyFips]       ,[pcm_AltCounty]       ,[pcm_AltContact]       ,[pcm_AltPhone]       ,[pcm_AltFAX]     
+		    ,[pcm_AlteMail]       ,[pcm_AltURL]       ,[pcm_DefaultFilingCommittee]       ,[pcm_Acronym]       ,[pcm_Order]       ,[pcm_HasFinancialTransactions]  
+			   ,[pcm_reg_GUID]       ,[pcm_por_GUID]       ,[pcm_clt_GUID]       ,[pcm_acl_GUID]       ,[pcm_FormationDate]       ,[pcm_Qualified]       ,[pcm_QualifiedDate]       ,[pcm_SCC]    
+			      ,[pcm_SCCDate]       ,[pcm_CompanyCode]       ,[pcm_AllowOverLimit]       ,[pcm_Standardized]       ,[pcm_Bank]       ,[pcm_TaxId]       ,[pcm_Description]
+)
+select
+	org.orgguid--[pcm_GUID] [uniqueidentifier] NOT NULL,
+	,left(ltrim(isnull(cme.CommitteeID,'')),20)--[pcm_RegId] [nvarchar](20) NULL,
+	,left(ltrim(ISNULL(org.OrgName,'')),100)--[pcm_Name] [nvarchar](100) NOT NULL,
+	,LEFT(ltrim(isnull(p_addr.adr1,'')),50)
+	,LEFT(ltrim(isnull(p_addr.adr2,'')),50)
+	,''
+	,LEFT(ltrim(isnull(p_addr.city,'')),50)
+	,LEFT(ltrim(isnull(p_addr.state,'')),2)
+	,case when isnull(zip,'')>'' and len(ltrim(rtrim(zip)))<5
+						then right(replicate('0',5)+ltrim(isnull(rtrim([zip]),'')),5)
+					when isnull(zip,'')>'' and len(ltrim(zip)) in (9,10)
+						then left(ltrim(isnull(zip,'')),5)
+					else left(ltrim(isnull(zip,'')),10) end
+	,case when isnull(zip,'')>'' and len(zip)<5
+						then ''
+					when isnull(zip,'')>'' and len(zip) in (9,10)
+						then right(rtrim(zip),4)
+					else '' end
+	,null--[pcm_Postal] [nvarchar](10) NULL,
+	,ltrim(isnull(ti.firstname,'')+' '+isnull(ti.lastname,''))--[pcm_Contact] [nvarchar](100) NULL,
+	,(select top 1 left(isnull(cc_sample.[dbo].[RemoveNonAlphaNumericCharacters](pho.Area),'')+isnull(cc_sample.[dbo].[RemoveNonAlphaNumericCharacters](pho.Phone),''),20)
+			from cc_sample.[dbo].tblphone pho where pho.recid = rec.recid
+			order by case uses when 2 then 1 else uses end, editdate desc, creationdate desc)--[pcm_Phone] [nvarchar](20) NULL,
+	,(select top 1 left(ltrim(Email),100)
+			from cc_sample.[dbo].tblemail te where te.recid = rec.recid
+			order by primaryemail desc)--[pcm_eMail] [nvarchar](100) NULL,
+	,left(ltrim(org.webURL),100)--[pcm_URL] [nvarchar](100) NULL,
+	,NULL--[pcm_pty_GUID] [uniqueidentifier] NULL,
+	,isnull(pct_guid,(select pct_guid from std_politicalcommitteetype where pct_text = 'Committee' and pct_deleted=0))--[pcm_pct_GUID] [uniqueidentifier] NULL,
+	,case org.active when 0 then 1 else 0 end--[pcm_Deleted] [bit] NOT NULL,
+	,case org.active when -1 then 1 else 0 end--[pcm_Inactive] [bit] NULL,
+	,isnull(org.creationdate,getdate())--[pcm_CreatedOn] [datetime] NOT NULL,
+	,@AdminGuid--[pcm_CreatedBy] [uniqueidentifier] NOT NULL,
+	,org.editdate--[pcm_UpdatedOn] [datetime] NULL,
+	,org.editorguid--[pcm_UpdatedBy] [uniqueidentifier] NULL,
+	,case org.active when 0 then org.editdate else null end--[pcm_DeletedOn] [datetime] NULL,
+	,case org.active when 0 then org.editorguid else null end--[pcm_DeletedBy] [uniqueidentifier] NULL,
+	,left(ltrim(rec.recid),100)--[pcm_SourceId] [nvarchar](100) NULL,
+	,NULL--[pcm_FAX] [nvarchar](40) NULL,
+	,case when rec.recid in (select f.recid from cc_sample..tblfilercommittee f) then 1 else 0 end--[pcm_IsFilingCommittee] [bit] NULL,
+	,null--[pcm_ReceiptLimit] [money] NULL,
+	,null--[pcm_DisbursementLimit] [money] NULL,
+	,case when rec.recid in (select f.recid from cc_sample..tblfilercommittee f) then 1 else NULL end--[pcm_Active] [bit] NULL,
+	,NULL--[pcm_CountyFips] [nchar](6) NULL,
+	,NULL--[pcm_County] [nvarchar](100) NULL,
+	,NULL--[pcm_AltAddress1] [nvarchar](100) NULL,
+	,NULL--[pcm_AltAddress2] [nvarchar](100) NULL,
+	,NULL--[pcm_AltAddress3] [nvarchar](100) NULL,
+	,NULL--[pcm_AltCity] [nvarchar](60) NULL,
+	,NULL--[pcm_AltState] [nchar](4) NULL,
+	,NULL--[pcm_AltZip5] [nchar](10) NULL,
+	,NULL--[pcm_AltZip4] [nchar](8) NULL,
+	,NULL--[pcm_AltPostal] [nvarchar](20) NULL,
+	,NULL--[pcm_AltCountyFips] [nvarchar](6) NULL,
+	,NULL--[pcm_AltCounty] [nvarchar](100) NULL,
+	,NULL--[pcm_AltContact] [nvarchar](200) NULL,
+	,NULL--[pcm_AltPhone] [nvarchar](40) NULL,
+	,NULL--[pcm_AltFAX] [nvarchar](40) NULL,
+	,NULL--[pcm_AlteMail] [nvarchar](200) NULL,
+	,NULL--[pcm_AltURL] [nvarchar](200) NULL,
+	,case when exists (select * from std_politicalcommittee where pcm_isfilingcommittee=1 and pcm_deleted=0) then 0 when rec.recid in (select min(f.recid) from cc_sample..tblfilercommittee f where filercommiteeid = (select min(filercommiteeid) from cc_sample..tblfilercommittee) ) then 1 else NULL end--[pcm_DefaultFilingCommittee] [bit] NULL,
+	,null--[pcm_Acronym] [nvarchar](100) NULL,
+	,null--[pcm_Order] [int] NULL,
+	,null--[pcm_HasFinancialTransactions] [bit] NULL,
+	,null--[pcm_reg_GUID] [uniqueidentifier] NULL,
+	,null--[pcm_por_GUID] [uniqueidentifier] NULL,
+	,isnull(clt_guid,(select top 1 clt_guid from std7_clienttype where clt_text= 'other' and clt_deleted=0))--[pcm_clt_GUID] [uniqueidentifier] NULL,
+	,isnull(acl_guid,(select top 1 acl_guid from std7_activitylevel where acl_text= '' and acl_deleted=0))--[pcm_acl_GUID] [uniqueidentifier] NULL,
+	,tfc.formationdate--[pcm_FormationDate] [datetime] NULL,
+	,cme.qualified--[pcm_Qualified] [bit] NULL,
+	,cme.datequalified--[pcm_QualifiedDate] [datetime] NULL,
+	,tfc.smallcontributorcommittee--[pcm_SCC] [bit] NULL,
+	,tfc.sccdate--[pcm_SCCDate] [datetime] NULL,
+	,null--[pcm_CompanyCode] [int],
+	,isnull(voluntaryspendinglimit,0)--[pcm_AllowOverLimit] [bit] NULL
+	,case p_addr.autocorrect when 0 then 0 else null end--[pcm_Standardized]
+    ,org.bank--[pcm_Bank]
+    ,left(ltrim(org.ein),50)--[pcm_TaxId]
+    ,org.orgdescr--[pcm_Description]
+from cc_sample.dbo.tblOrganization org 
+JOIN cc_sample.dbo.tblRecords rec on rec.Seq_ID = org.OrgID and rec.Type = 2
+left join cc_sample..tblCommittee cme on org.OrgID = cme.OrgID
+left join cc_sample..tblfilercommittee tfc on rec.recid = tfc.recid
+left join std7_clienttype
+	on clt_text=tfc.clienttype and clt_deleted=0
+left join std7_activitylevel
+	on isnull(cme.activitylevel,'')=acl_text and acl_deleted=0
+left join [hvv-ccdb1].referencetables.dbo.tblcommitteelookup tcl
+	on cme.committeetype = tcl.typeid
+left join dbo.std_politicalcommitteetype pct
+	on pct_text = case when tcl.typetext in ('General/Candidate Committee','Federal Candidate','Primarily Formed Candidate, Officeholder') 
+							then 'Candidate Committee'
+					   when tcl.typetext in ('2+ Individuals PAC','Business PAC','Federal PAC','Multi-Candidate Federal PAC','Organization PAC'
+											,'Out of State PAC','PAC','State PAC') 
+							then 'PAC'
+					   when tcl.typetext in ('Party Committee','State Party') 
+							then 'Political Party Committee'
+					   when tcl.typetext in ('Controlled Ballot Measure','Primarily Formed Ballot Measure','Sponsored Ballot Measure') 
+							then 'Ballot Measure Committee'
+					   when tcl.typetext in ('County Candidate','County PAC','County Party','County Referendum') 
+							then 'County Committee'
+					   when tcl.typetext in ('County Referendum','Federal Referendum','State Referendum') 
+							then 'Referendum'
+					   when tcl.typetext in ('Exploratory Committee') 
+							then 'Exploratory Committee'
+					   when tcl.typetext in ('Muni. Candidate','Muni. PAC','Muni. Referendum') 
+							then 'Municipality Committee'
+					   when tcl.typetext in ('Small Contributor Committee') 
+							then 'Candidate Threshold Committee (Less than $500)'
+					   when tcl.typetext in ('Sponsored General Purpose') 
+							then 'Authorized Committee'
+					   when tcl.typetext in ('Broad Based General Purpose', 'Broad Based Sponsored General Purpose','Caucus','General Purpose','Incidental'
+											,'Minor Party','Political Club')
+							then 'Committee'
+					   when tcl.typetext in ('Legislative District Party','State Candidate') 
+							then 'State Office Committee'
+					   when tcl.typetext in ('Union') 
+							then 'Trade Association'
+					   else 'Committee' end
+LEFT JOIN cc_sample.dbo.tblAddress p_addr on p_addr.RecID = rec.RecID and p_addr.PrimaryAddress = 1 
+LEFT JOIN cc_sample.dbo.tblUser usr on usr.UserID = org.editor
+left join cc_sample.dbo.tblindividual ti on ti.individ = org.seq_cntrl
+where org.committee=1
+order by cme.CommitteeID
+--delete all 2nd, 3rd,.... nth duplicates
+;WITH cte
+     AS (
+			SELECT ROW_NUMBER() OVER (PARTITION BY pcm_guid ORDER BY (SELECT 0)) RN
+			FROM   #std_PoliticalCommitteeTemp
+		)
+DELETE FROM cte
+WHERE  RN > 1
+--step 5 - Insert into std_PoliticalCommittee from #std_PoliticalCommitteeTemp
+insert into std_PoliticalCommittee
+([pcm_GUID]       ,[pcm_RegId]       ,[pcm_Name]       ,[pcm_Address1]       ,[pcm_Address2]       ,[pcm_Address3]       ,[pcm_City]       ,[pcm_State]       
+	   ,[pcm_Zip5]       ,[pcm_Zip4]       ,[pcm_Postal]       ,[pcm_Contact]       ,[pcm_Phone]       ,[pcm_eMail]       ,[pcm_URL]       ,[pcm_pty_GUID]     
+	     ,[pcm_pct_GUID]       ,[pcm_Deleted]       ,[pcm_Inactive]       ,[pcm_CreatedOn]       ,[pcm_CreatedBy]       ,[pcm_UpdatedOn]       ,[pcm_UpdatedBy]       
+		 ,[pcm_DeletedOn]       ,[pcm_DeletedBy]       ,[pcm_SourceId]       ,[pcm_FAX]       ,[pcm_IsFilingCommittee]       ,[pcm_ReceiptLimit]       ,[pcm_DisbursementLimit]       
+		 ,[pcm_Active]       ,[pcm_CountyFips]       ,[pcm_County]       ,[pcm_AltAddress1]       ,[pcm_AltAddress2]       ,[pcm_AltAddress3]       ,[pcm_AltCity]       ,[pcm_AltState]      
+		  ,[pcm_AltZip5]       ,[pcm_AltZip4]       ,[pcm_AltPostal]       ,[pcm_AltCountyFips]       ,[pcm_AltCounty]       ,[pcm_AltContact]       ,[pcm_AltPhone]       ,[pcm_AltFAX]     
+		    ,[pcm_AlteMail]       ,[pcm_AltURL]       ,[pcm_DefaultFilingCommittee]       ,[pcm_Acronym]       ,[pcm_Order]       ,[pcm_HasFinancialTransactions]  
+			   ,[pcm_reg_GUID]       ,[pcm_por_GUID]       ,[pcm_clt_GUID]       ,[pcm_acl_GUID]       ,[pcm_FormationDate]       ,[pcm_Qualified]       ,[pcm_QualifiedDate]       ,[pcm_SCC]    
+			      ,[pcm_SCCDate]       ,[pcm_CompanyCode]       ,[pcm_AllowOverLimit]       ,[pcm_Standardized]       ,[pcm_Bank]       ,[pcm_TaxId]       ,[pcm_Description])
+select 
+[pcm_GUID]       ,[pcm_RegId]       ,[pcm_Name]       ,[pcm_Address1]       ,[pcm_Address2]       ,[pcm_Address3]       ,[pcm_City]       ,[pcm_State]       
+	   ,[pcm_Zip5]       ,[pcm_Zip4]       ,[pcm_Postal]       ,[pcm_Contact]       ,[pcm_Phone]       ,[pcm_eMail]       ,[pcm_URL]       ,[pcm_pty_GUID]     
+	     ,[pcm_pct_GUID]       ,[pcm_Deleted]       ,[pcm_Inactive]       ,[pcm_CreatedOn]       ,[pcm_CreatedBy]       ,[pcm_UpdatedOn]       ,[pcm_UpdatedBy]       
+		 ,[pcm_DeletedOn]       ,[pcm_DeletedBy]       ,[pcm_SourceId]       ,[pcm_FAX]       ,[pcm_IsFilingCommittee]       ,[pcm_ReceiptLimit]       ,[pcm_DisbursementLimit]       
+		 ,[pcm_Active]       ,[pcm_CountyFips]       ,[pcm_County]       ,[pcm_AltAddress1]       ,[pcm_AltAddress2]       ,[pcm_AltAddress3]       ,[pcm_AltCity]       ,[pcm_AltState]      
+		  ,[pcm_AltZip5]       ,[pcm_AltZip4]       ,[pcm_AltPostal]       ,[pcm_AltCountyFips]       ,[pcm_AltCounty]       ,[pcm_AltContact]       ,[pcm_AltPhone]       ,[pcm_AltFAX]     
+		    ,[pcm_AlteMail]       ,[pcm_AltURL]       ,[pcm_DefaultFilingCommittee]       ,[pcm_Acronym]       ,[pcm_Order]       ,[pcm_HasFinancialTransactions]  
+			   ,[pcm_reg_GUID]       ,[pcm_por_GUID]       ,[pcm_clt_GUID]       ,[pcm_acl_GUID]       ,[pcm_FormationDate]       ,[pcm_Qualified]       ,[pcm_QualifiedDate]       ,[pcm_SCC]    
+			      ,[pcm_SCCDate]       ,[pcm_CompanyCode]       ,[pcm_AllowOverLimit]       ,[pcm_Standardized]       ,[pcm_Bank]       ,[pcm_TaxId]       ,[pcm_Description]
+from #std_PoliticalCommitteeTemp
+--step 6 - drop temporary table #std_PoliticalCommitteeTemp
+drop table #std_PoliticalCommitteeTemp
+------------pcm_regid to [dbo].[std_PoliticalCommittee_ComplianceReportAuthority]
+;with bestfilingcommittee as
+(select pcm_guid pcmguid, governingbody gb, row_number() over (partition by pcm_guid
+													order by case when r.recid = tfc.recid then 1 else 2 end
+															,case when pcm_regid like 'C%' and GoverningBody = 'FEC' then 1
+																  when pcm_regid > '' and (ta.state=GoverningBody or (ta.state='CA' and governingbody like '%FPPC%')) then 2 
+																  else 3 end
+															,case when isnull(governingbody,'')>'' then 1 else 2 end
+															,filercommiteeid) rw
+from std_politicalcommittee
+join cc_sample..tblorganization o
+	on o.orgguid = pcm_guid
+join cc_sample..tblrecords r
+	on r.seq_id = o.orgid and r.type=2
+left join cc_sample..tbladdress ta
+	on ta.recid = r.recid and ta.PrimaryAddress=1
+left join cc_sample..tblfilercommittee tfc
+	on 1=1
+)
+INSERT INTO [dbo].[std_PoliticalCommittee_ComplianceReportAuthority]
+           ([lpc_GUID]            ,[lpc_pcm_GUID]            ,[lpc_cau_GUID]            ,[lpc_RegistrationID]            ,[lpc_FilingID]            ,[lpc_FilingPasswordHashed]            ,[lpc_Deleted]            ,[lpc_CreatedOn]            ,[lpc_CreatedBy]            ,[lpc_UpdatedOn]            ,[lpc_UpdatedBy]            ,[lpc_DeletedOn]            ,[lpc_DeletedBy])
+     SELECT
+           newid()--(<lpc_GUID, uniqueidentifier,>
+           ,pcm_guid--<lpc_pcm_GUID, uniqueidentifier,>
+           ,cau_guid--<lpc_cau_GUID, uniqueidentifier,>
+           ,pcm_regid--<lpc_RegistrationID, nvarchar(50),>
+           ,''--<lpc_FilingID, nvarchar(50),>
+           ,''--<lpc_FilingPasswordHashed, nvarchar(50),>
+           ,0--<lpc_Deleted, bit,>
+           ,getdate()--<lpc_CreatedOn, datetime,>
+           ,@AdminGuid--<lpc_CreatedBy, uniqueidentifier,>
+           ,null--<lpc_UpdatedOn, datetime,>
+           ,null--<lpc_UpdatedBy, uniqueidentifier,>
+           ,null--<lpc_DeletedOn, datetime,>
+           ,null--<lpc_DeletedBy, uniqueidentifier,>)
+	from std_politicalcommittee
+	join std_compliancereportauthority
+		on  cau_deleted=0  --and isnull(pcm_regid,'')>''
+	join bestfilingcommittee
+		on pcm_guid =pcmguid and cau_code = case when gb like '%FPPC%' then 'CA' else gb end
+		and rw=1
+
+--identify known FEC
+update [std_PoliticalCommittee_ComplianceReportAuthority]
+set lpc_cau_guid = cau_guid
+from [std_PoliticalCommittee_ComplianceReportAuthority]
+join std_compliancereportauthority
+	on cau_code = 'FEC' and lpc_cau_guid<>cau_guid and lpc_registrationid like 'C%'
+
+---convert remaining pcm addresses
+INSERT INTO [dbo].[std_CompanyLocation]
+           ([clo_GUID]            ,[clo_cmp_GUID]            ,[clo_clt_GUID]            ,[clo_Name]            ,[clo_Address1]            ,[clo_Address2]            ,[clo_Address3]            ,[clo_City]            ,[clo_State]            ,[clo_Zip5]            ,[clo_Zip4]            ,[clo_Postal]            ,[clo_Crrt]            ,[clo_DPT]            ,[clo_Tract]            ,[clo_Block]            ,[clo_Lat]            ,[clo_Long]            ,[clo_Phone]            ,[clo_Fax]            ,[clo_EMail]            ,[clo_CountyFips]            ,[clo_County]            ,[clo_Congress]            ,[clo_Senate]            ,[clo_Legislature]            ,[clo_PrecinctCode]            ,[clo_PrecinctName]            ,[clo_Headquarter]            ,[clo_Deleted]            ,[clo_CreatedOn]            ,[clo_CreatedBy]            ,[clo_UpdatedOn]            ,[clo_UpdatedBy]            ,[clo_DeletedOn]            ,[clo_DeletedBy]            ,[clo_SourceId]            ,[clo_HouseNumber]            ,[clo_HouseNumberSuffix]            ,[clo_Street]            ,[clo_RuralRoute]            ,[clo_POBOX]            ,[clo_Line2_std]            ,[clo_Line3_std]            ,[clo_Ward]            ,[clo_EvenOdd]            ,[clo_PreDirection]           ,[clo_StreetSuffix]            ,[clo_PostDirection]            ,[clo_Line1_std]            ,[clo_Standardized]            ,[clo_City_std]            ,[clo_State_std])
+     SELECT
+           addr.adrguid--(<clo_GUID, uniqueidentifier,>
+           ,org.orgguid--<clo_cmp_GUID, uniqueidentifier,>
+           ,clt_guid--<clo_clt_GUID, uniqueidentifier,>
+           ,left(ltrim(isnull(addr.company,'')),100)--<clo_Name, nvarchar(100),>
+           ,LEFT(ltrim(isnull(addr.adr1,'')),50)--<clo_Address1, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.adr2,'')),50)--<clo_Address2, nvarchar(50),>
+           ,''--<clo_Address3, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.city,'')),50)--<clo_City, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.state,'')),2)--<clo_State, nvarchar(2),>
+           ,case when isnull(zip,'')>'' and len(ltrim(rtrim(zip)))<5
+						then right(replicate('0',5)+ltrim(isnull(rtrim([zip]),'')),5)
+					when isnull(zip,'')>'' and len(ltrim(zip)) in (9,10)
+						then left(ltrim(isnull(zip,'')),5)
+					else left(ltrim(isnull(zip,'')),10) end--<clo_Zip5, nvarchar(10),>
+           ,case when isnull(zip,'')>'' and len(zip)<5
+						then ''
+					when isnull(zip,'')>'' and len(zip) in (9,10)
+						then right(rtrim(zip),4)
+					else '' end--<clo_Zip4, nchar(4),>
+           ,NULL--<clo_Postal, nvarchar(10),>
+           ,left(ltrim(carrierroute),4)--<clo_Crrt, nchar(4),>
+           ,null--<clo_DPT, nchar(3),>
+           ,null--<clo_Tract, nchar(6),>
+           ,null--<clo_Block, nchar(4),>
+           ,null--<clo_Lat, float,>
+           ,null--<clo_Long, float,>
+           ,null--<clo_Phone, nvarchar(20),>
+           ,null--<clo_Fax, nvarchar(20),>
+           ,null--<clo_EMail, nvarchar(100),>
+           ,null--<clo_CountyFips, nchar(3),>
+           ,left(ltrim(county),50)--<clo_County, nvarchar(50),>
+           ,left(ltrim(congdist),2)--<clo_Congress, nchar(2),>
+           ,left(ltrim(addr.statesenate),10)--<clo_Senate, nvarchar(10),>
+           ,left(ltrim(statehouse),10)--<clo_Legislature, nvarchar(10),>
+           ,null--<clo_PrecinctCode, nvarchar(10),>
+           ,''--<clo_PrecinctName, nvarchar(50),>
+           ,0--<clo_Headquarter, bit,>
+           ,0--<clo_Deleted, bit,>
+           ,isnull(addr.CreationDate,getdate())--<clo_CreatedOn, datetime,>
+           ,@AdminGuid--<clo_CreatedBy, uniqueidentifier,>
+           ,addr.editdate--<clo_UpdatedOn, datetime,>
+           ,usr.userguid--<clo_UpdatedBy, uniqueidentifier,>
+           ,null--<clo_DeletedOn, datetime,>
+           ,null--<clo_DeletedBy, uniqueidentifier,>
+           ,null--<clo_SourceId, nvarchar(100),>
+           ,null--<clo_HouseNumber, nvarchar(10),>
+           ,null--<clo_HouseNumberSuffix, nvarchar(10),>
+           ,null--<clo_Street, nvarchar(30),>
+           ,null--<clo_RuralRoute, nvarchar(30),>
+           ,null--<clo_POBOX, nvarchar(10),>
+           ,null--<clo_Line2_std, nvarchar(50),>
+           ,null--<clo_Line3_std, nvarchar(50),>
+           ,null--<clo_Ward, nvarchar(10),>
+           ,null--<clo_EvenOdd, nchar(1),>
+           ,null--<clo_PreDirection, nchar(4),>
+           ,null--<clo_StreetSuffix, nchar(8),>
+           ,null--<clo_PostDirection, nchar(4),>
+           ,null--<clo_Line1_std, nvarchar(50),>
+           ,case autocorrect when 0 then 0 else null end--<clo_Standardized, bit,>
+           ,null--<clo_City_std, nvarchar(50),>
+           ,null--<clo_State_std, nvarchar(2),>)
+		FROM cc_sample.dbo.[tblAddress] addr
+		INNER JOIN cc_sample.dbo.tblRecords rec on rec.RecID = addr.RecID AND rec.Type = 2 and addr.primaryaddress=0
+		INNER JOIN cc_sample.dbo.tblorganization org on org.orgID = rec.Seq_ID and org.committee=1
+		left JOIN cc_sample.dbo.tblUser usr on usr.UserID = addr.editor
+		join std_companylocationtype on clt_text = 'other' and clt_Deleted=0
+
+--********************************************************************************
+--Convert data from BO..tblOrganization,tblAddress to P7..std_CompanyLocation
+--********************************************************************************
+INSERT INTO [dbo].[std_CompanyLocation]
+           ([clo_GUID]            ,[clo_cmp_GUID]            ,[clo_clt_GUID]            ,[clo_Name]            ,[clo_Address1]            ,[clo_Address2]            ,[clo_Address3]            ,[clo_City]            ,[clo_State]            ,[clo_Zip5]            ,[clo_Zip4]            ,[clo_Postal]            ,[clo_Crrt]            ,[clo_DPT]            ,[clo_Tract]            ,[clo_Block]            ,[clo_Lat]            ,[clo_Long]            ,[clo_Phone]            ,[clo_Fax]            ,[clo_EMail]            ,[clo_CountyFips]            ,[clo_County]            ,[clo_Congress]            ,[clo_Senate]            ,[clo_Legislature]            ,[clo_PrecinctCode]            ,[clo_PrecinctName]            ,[clo_Headquarter]            ,[clo_Deleted]            ,[clo_CreatedOn]            ,[clo_CreatedBy]            ,[clo_UpdatedOn]            ,[clo_UpdatedBy]            ,[clo_DeletedOn]            ,[clo_DeletedBy]            ,[clo_SourceId]            ,[clo_HouseNumber]            ,[clo_HouseNumberSuffix]            ,[clo_Street]            ,[clo_RuralRoute]            ,[clo_POBOX]            ,[clo_Line2_std]            ,[clo_Line3_std]            ,[clo_Ward]            ,[clo_EvenOdd]            ,[clo_PreDirection]           ,[clo_StreetSuffix]            ,[clo_PostDirection]            ,[clo_Line1_std]            ,[clo_Standardized]            ,[clo_City_std]            ,[clo_State_std])
+     SELECT
+           addr.adrguid--(<clo_GUID, uniqueidentifier,>
+           ,org.orgguid--<clo_cmp_GUID, uniqueidentifier,>
+           ,clt_guid--<clo_clt_GUID, uniqueidentifier,>
+           ,left(ltrim(isnull(addr.company,'')),100)--<clo_Name, nvarchar(100),>
+           ,LEFT(ltrim(isnull(addr.adr1,'')),50)--<clo_Address1, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.adr2,'')),50)--<clo_Address2, nvarchar(50),>
+           ,''--<clo_Address3, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.city,'')),50)--<clo_City, nvarchar(50),>
+           ,LEFT(ltrim(isnull(addr.state,'')),2)--<clo_State, nvarchar(2),>
+           ,case when isnull(zip,'')>'' and len(ltrim(rtrim(zip)))<5
+						then right(replicate('0',5)+ltrim(isnull(rtrim([zip]),'')),5)
+					when isnull(zip,'')>'' and len(ltrim(zip)) in (9,10)
+						then left(ltrim(isnull(zip,'')),5)
+					else left(ltrim(isnull(zip,'')),10) end--<clo_Zip5, nvarchar(10),>
+           ,case when isnull(zip,'')>'' and len(zip)<5
+						then ''
+					when isnull(zip,'')>'' and len(zip) in (9,10)
+						then right(rtrim(zip),4)
+					else '' end--<clo_Zip4, nchar(4),>
+           ,NULL--<clo_Postal, nvarchar(10),>
+           ,left(ltrim(carrierroute),4)--<clo_Crrt, nchar(4),>
+           ,null--<clo_DPT, nchar(3),>
+           ,null--<clo_Tract, nchar(6),>
+           ,null--<clo_Block, nchar(4),>
+           ,null--<clo_Lat, float,>
+           ,null--<clo_Long, float,>
+           ,null--<clo_Phone, nvarchar(20),>
+           ,null--<clo_Fax, nvarchar(20),>
+           ,null--<clo_EMail, nvarchar(100),>
+           ,null--<clo_CountyFips, nchar(3),>
+           ,left(ltrim(county),50)--<clo_County, nvarchar(50),>
+           ,left(ltrim(congdist),2)--<clo_Congress, nchar(2),>
+           ,left(ltrim(addr.statesenate),10)--<clo_Senate, nvarchar(10),>
+           ,left(ltrim(statehouse),10)--<clo_Legislature, nvarchar(10),>
+           ,null--<clo_PrecinctCode, nvarchar(10),>
+           ,''--<clo_PrecinctName, nvarchar(50),>
+           ,case addr.primaryaddress when 1 then 1 else 0 end --<clo_Headquarter, bit,>
+           ,0--<clo_Deleted, bit,>
+           ,isnull(addr.CreationDate,getdate())--<clo_CreatedOn, datetime,>
+           ,@AdminGuid--<clo_CreatedBy, uniqueidentifier,>
+           ,addr.editdate--<clo_UpdatedOn, datetime,>
+           ,usr.userguid--<clo_UpdatedBy, uniqueidentifier,>
+           ,null--<clo_DeletedOn, datetime,>
+           ,null--<clo_DeletedBy, uniqueidentifier,>
+           ,null--<clo_SourceId, nvarchar(100),>
+           ,null--<clo_HouseNumber, nvarchar(10),>
+           ,null--<clo_HouseNumberSuffix, nvarchar(10),>
+           ,null--<clo_Street, nvarchar(30),>
+           ,null--<clo_RuralRoute, nvarchar(30),>
+           ,null--<clo_POBOX, nvarchar(10),>
+           ,null--<clo_Line2_std, nvarchar(50),>
+           ,null--<clo_Line3_std, nvarchar(50),>
+           ,null--<clo_Ward, nvarchar(10),>
+           ,null--<clo_EvenOdd, nchar(1),>
+           ,null--<clo_PreDirection, nchar(4),>
+           ,null--<clo_StreetSuffix, nchar(8),>
+           ,null--<clo_PostDirection, nchar(4),>
+           ,null--<clo_Line1_std, nvarchar(50),>
+           ,case autocorrect when 0 then 0 else null end--<clo_Standardized, bit,>
+           ,null--<clo_City_std, nvarchar(50),>
+           ,null--<clo_State_std, nvarchar(2),>)
+		FROM cc_sample.dbo.[tblAddress] addr
+		INNER JOIN cc_sample.dbo.tblRecords rec on rec.RecID = addr.RecID AND rec.Type = 2
+		INNER JOIN cc_sample.dbo.tblorganization org on org.orgID = rec.Seq_ID and org.committee=0
+		left JOIN cc_sample.dbo.tblUser usr on usr.UserID = addr.editor
+		join std_companylocationtype on clt_text = case addr.primaryaddress when 1 then 'Head Quarters' else 'Other' end and clt_Deleted=0
+
+-----------------
+--convert pcm and cmp phones
+----------------
+INSERT INTO [dbo].[std7_CompanyPhone]
+           ([cpo_GUID]
+           ,[cpo_cmp_GUID]
+           ,[cpo_Number]
+           ,[cpo_Extension]
+           ,[cpo_cpt_GUID]
+           ,[cpo_Deleted]
+           ,[cpo_CreatedOn]
+           ,[cpo_CreatedBy]
+           ,[cpo_UpdatedOn]
+           ,[cpo_UpdatedBy]
+           ,[cpo_DeletedOn]
+           ,[cpo_DeletedBy]
+           ,[cpo_Default])
+     SELECT
+           phoguid--(<cpo_GUID, uniqueidentifier,>
+           ,org.orgguid--<cpo_cmp_GUID, uniqueidentifier,>
+           ,cc_sample.[dbo].[RemoveNonAlphaNumericCharacters](pho.Area)+cc_sample.[dbo].[RemoveNonAlphaNumericCharacters](pho.Phone)--<cpo_Number, nvarchar(20),>
+           ,left(ltrim(pho.Ext),5)--<cpo_Extension, nvarchar(5),>
+           ,case 
+				when pho.uses = 2 then (select top 1 cpt_guid from std7_companyPhoneType where cpt_Text = 'Work' and cpt_Deleted = 0)
+				when pho.uses = 3 then (select top 1 cpt_guid from std7_companyPhoneType where cpt_Text = 'Fax' and cpt_Deleted = 0)
+				when pho.uses = 4 then (select top 1 cpt_guid from std7_companyPhoneType where cpt_Text = 'Mobile' and cpt_Deleted = 0)
+				else (select top 1 cpt_guid from std7_companyPhoneType where cpt_Text = 'Other' and cpt_Deleted = 0)
+			end--<cpo_cpt_GUID, uniqueidentifier,>
+           ,0--<cpo_Deleted, bit,>
+           ,isnull(pho.CreationDate,getdate())--<cpo_CreatedOn, datetime,>
+           ,@AdminGuid--<cpo_CreatedBy, uniqueidentifier,>
+           ,pho.editdate--<cpo_UpdatedOn, datetime,>
+           ,pho.editorguid--<cpo_UpdatedBy, uniqueidentifier,>
+           ,null--<cpo_DeletedOn, datetime,>
+           ,null--<cpo_DeletedBy, uniqueidentifier,>
+           ,0--<cpo_Default, bit,>)
+	 from cc_sample.dbo.tblPhone pho
+		INNER JOIN cc_sample.dbo.tblRecords rec on rec.RecID = pho.RecID AND rec.Type = 2
+		INNER JOIN cc_sample.dbo.tblorganization org on org.orgID = rec.Seq_ID and org.committee=0
+
+
+
+INSERT INTO [dbo].[std7_CommitteePhone]
+           ([ppo_GUID]
+           ,[ppo_pcm_GUID]
+           ,[ppo_Number]
+           ,[ppo_Extension]
+           ,[ppo_ppt_GUID]
+           ,[ppo_Deleted]
+           ,[ppo_CreatedOn]
+           ,[ppo_CreatedBy]
+           ,[ppo_UpdatedOn]
+           ,[ppo_UpdatedBy]
+           ,[ppo_DeletedOn]
+           ,[ppo_DeletedBy]
+           ,[ppo_Default])
+     SELECT
+           phoguid--(<cpo_GUID, uniqueidentifier,>
+           ,org.orgguid--<cpo_cmp_GUID, uniqueidentifier,>
+           ,cc_sample.[dbo].[RemoveNonAlphaNumericCharacters](pho.Area)+cc_sample.[dbo].[RemoveNonAlphaNumericCharacters](pho.Phone)--<cpo_Number, nvarchar(20),>
+           ,left(ltrim(pho.Ext),5)--<cpo_Extension, nvarchar(5),>
+           ,case 
+				when pho.uses = 2 then (select top 1 ppt_guid from std7_committeePhoneType where ppt_Text = 'Work' and ppt_Deleted = 0)
+				when pho.uses = 3 then (select top 1 ppt_guid from std7_committeePhoneType where ppt_Text = 'Fax' and ppt_Deleted = 0)
+				when pho.uses = 4 then (select top 1 ppt_guid from std7_committeePhoneType where ppt_Text = 'Mobile' and ppt_Deleted = 0)
+				else (select top 1 ppt_guid from std7_committeePhoneType where ppt_Text = 'Other' and ppt_Deleted = 0)
+			end--<cpo_cpt_GUID, uniqueidentifier,>
+           ,0--<cpo_Deleted, bit,>
+           ,isnull(pho.CreationDate,getdate())--<cpo_CreatedOn, datetime,>
+           ,@AdminGuid--<cpo_CreatedBy, uniqueidentifier,>
+           ,pho.editdate--<cpo_UpdatedOn, datetime,>
+           ,pho.editorguid--<cpo_UpdatedBy, uniqueidentifier,>
+           ,null--<cpo_DeletedOn, datetime,>
+           ,null--<cpo_DeletedBy, uniqueidentifier,>
+           ,0--<cpo_Default, bit,>)
+	 from cc_sample.dbo.tblPhone pho
+		INNER JOIN cc_sample.dbo.tblRecords rec on rec.RecID = pho.RecID AND rec.Type = 2
+		INNER JOIN cc_sample.dbo.tblorganization org on org.orgID = rec.Seq_ID and org.committee=1
+
+
+
+-----------------
+--convert pcm and cmp emails
+----------------
+INSERT INTO [dbo].[std7_CompanyeMail]
+           ([cem_GUID]
+           ,[cem_cmp_GUID]
+           ,[cem_Email]
+           ,[cem_cet_GUID]
+           ,[cem_Default]
+           ,[cem_Deleted]
+           ,[cem_CreatedOn]
+           ,[cem_CreatedBy]
+           ,[cem_UpdatedOn]
+           ,[cem_UpdatedBy]
+           ,[cem_DeletedOn]
+           ,[cem_DeletedBy])
+     SELECT 
+           emaguid--(<cem_GUID, uniqueidentifier,>
+           ,org.orgguid--<cem_cmp_GUID, uniqueidentifier,>
+           ,ema.email--<cem_Email, nvarchar(250),>
+           ,(select top 1 cet_guid from std7_companyemailtype where cet_text = 'Work' and cet_deleted = 0) --<cem_cet_GUID, uniqueidentifier,>
+           ,ema.primaryemail--<cem_Default, bit,>
+           ,0--<cem_Deleted, bit,>
+           ,isnull(ema.CreationDate,getdate()), @AdminGuid, ema.editdate, usr.editorGUID
+           ,null--<cem_DeletedOn, datetime,>
+           ,null--<cem_DeletedBy, uniqueidentifier,>)
+	FROM cc_sample.dbo.tblEmail ema
+	INNER JOIN cc_sample.dbo.tblRecords rec on rec.RecID = ema.RecID AND rec.Type = 2
+	INNER JOIN cc_sample.dbo.tblorganization org on org.orgID = rec.Seq_ID
+	left JOIN cc_sample.dbo.tblUser usr on usr.UserID = ema.editor
+
+
+-----------------
+--convert employers
+----------------
+
+
+INSERT INTO [dbo].[std_Company]
+           ([cmp_GUID]            ,[cmp_Name]            ,[cmp_cmt_GUID]            ,[cmp_Deleted]            ,[cmp_CreatedOn]            ,[cmp_CreatedBy]            ,[cmp_UpdatedOn]            ,[cmp_UpdatedBy]            ,[cmp_DeletedOn]            ,[cmp_DeletedBy]            ,[cmp_Active]            ,[cmp_idu_GUID]            ,[cmp_HasFinancialTransactions]            ,[cmp_Bank]            ,[cmp_URL]            ,[cmp_TaxId]            ,[cmp_Description]            ,[cmp_SourceID])
+     SELECT
+           newid()--(<cmp_GUID, uniqueidentifier,>
+           ,ind.employer--<cmp_Name, nvarchar(250),>
+           ,cmt_guid--<cmp_cmt_GUID, uniqueidentifier,>
+           ,0--<cmp_Deleted, bit,>
+           ,getdate()--<cmp_CreatedOn, datetime,>
+           ,@AdminGuid--<cmp_CreatedBy, uniqueidentifier,>
+           ,NULL--<cmp_UpdatedOn, datetime,>
+           ,NULL--<cmp_UpdatedBy, uniqueidentifier,>
+           ,NULL--[pcm_DeletedOn] [datetime] NULL,
+		   ,NULL--case<cmp_DeletedOn, datetime,>
+           ,0--<cmp_Active, bit,>
+           ,NULL--<cmp_idu_GUID, uniqueidentifier,>
+           ,null--<cmp_HasFinancialTransactions, bit,>
+           ,0--<cmp_Bank, bit,>
+           ,null--<cmp_URL, nvarchar(500),>
+           ,null--<cmp_TaxId, nvarchar(50),>
+           ,null--<cmp_Description, nvarchar(max),>
+           ,null--<cmp_SourceID, nvarchar(50),>)
+from cc_sample..tblindividual ind
+join cc_sample..tblrecords rec on rec.seq_id =ind.individ and rec.type = 1
+join std_companytype on cmt_text='' and cmt_Deleted=0
+where employer not in (select cmp_name from std_company)
+	and isnull(employer,'')>''
+group by employer, cmt_guid
+
+INSERT INTO [dbo].[std_CompanyLocation]
+           ([clo_GUID]            ,[clo_cmp_GUID]            ,[clo_clt_GUID]            ,[clo_Name]            ,[clo_Address1]            ,[clo_Address2]            ,[clo_Address3]            ,[clo_City]            ,[clo_State]            ,[clo_Zip5]            ,[clo_Zip4]            ,[clo_Postal]            ,[clo_Crrt]            ,[clo_DPT]            ,[clo_Tract]            ,[clo_Block]            ,[clo_Lat]            ,[clo_Long]            ,[clo_Phone]            ,[clo_Fax]            ,[clo_EMail]            ,[clo_CountyFips]            ,[clo_County]            ,[clo_Congress]            ,[clo_Senate]            ,[clo_Legislature]            ,[clo_PrecinctCode]            ,[clo_PrecinctName]            ,[clo_Headquarter]            ,[clo_Deleted]            ,[clo_CreatedOn]            ,[clo_CreatedBy]            ,[clo_UpdatedOn]            ,[clo_UpdatedBy]            ,[clo_DeletedOn]            ,[clo_DeletedBy]            ,[clo_SourceId]            ,[clo_HouseNumber]            ,[clo_HouseNumberSuffix]            ,[clo_Street]            ,[clo_RuralRoute]            ,[clo_POBOX]            ,[clo_Line2_std]            ,[clo_Line3_std]            ,[clo_Ward]            ,[clo_EvenOdd]            ,[clo_PreDirection]            ,[clo_StreetSuffix]            ,[clo_PostDirection]            ,[clo_Line1_std]            ,[clo_Standardized]            ,[clo_City_std]            ,[clo_State_std])
+	SELECT
+           newid()--(<clo_GUID, uniqueidentifier,>
+           ,cmp_guid--<clo_cmp_GUID, uniqueidentifier,>
+           ,clt_guid--<clo_clt_GUID, uniqueidentifier,>
+           ,''--<clo_Name, nvarchar(100),>
+           ,''--LEFT(ltrim(isnull(addr.adr1,'')),50)--<clo_Address1, nvarchar(50),>
+           ,''--LEFT(ltrim(isnull(addr.adr2,'')),50)--<clo_Address2, nvarchar(50),>
+           ,''--<clo_Address3, nvarchar(50),>
+           ,''--LEFT(ltrim(isnull(addr.city,'')),50)--<clo_City, nvarchar(50),>
+           ,''--LEFT(ltrim(isnull(addr.state,'')),2)--<clo_State, nvarchar(2),>
+           ,''--case when isnull(zip,'')>'' and len(ltrim(rtrim(zip)))<5
+					--	then right(replicate('0',5)+ltrim(isnull(rtrim([zip]),'')),5)
+					--when isnull(zip,'')>'' and len(ltrim(zip)) in (9,10)
+					--	then left(ltrim(isnull(zip,'')),5)
+					--else left(ltrim(isnull(zip,'')),10) end--<clo_Zip5, nvarchar(10),>
+           ,''--case when isnull(zip,'')>'' and len(zip)<5
+					--	then ''
+					--when isnull(zip,'')>'' and len(zip) in (9,10)
+					--	then right(rtrim(zip),4)
+					--else '' end--<clo_Zip4, nchar(4),>
+           ,NULL--<clo_Postal, nvarchar(10),>
+           ,''--left(ltrim(carrierroute),4)--<clo_Crrt, nchar(4),>
+           ,null--<clo_DPT, nchar(3),>
+           ,null--<clo_Tract, nchar(6),>
+           ,null--<clo_Block, nchar(4),>
+           ,null--<clo_Lat, float,>
+           ,null--<clo_Long, float,>
+           ,null--<clo_Phone, nvarchar(20),>
+           ,null--<clo_Fax, nvarchar(20),>
+           ,null--<clo_EMail, nvarchar(100),>
+           ,null--<clo_CountyFips, nchar(3),>
+           ,''--left(ltrim(county),50)--<clo_County, nvarchar(50),>
+           ,''--left(ltrim(congdist),2)--<clo_Congress, nchar(2),>
+           ,''--left(ltrim(addr.statesenate),10)--<clo_Senate, nvarchar(10),>
+           ,''--left(ltrim(statehouse),10)--<clo_Legislature, nvarchar(10),>
+           ,null--<clo_PrecinctCode, nvarchar(10),>
+           ,''--<clo_PrecinctName, nvarchar(50),>
+           ,1--<clo_Headquarter, bit,>
+           ,0--<clo_Deleted, bit,>
+           ,getdate()--<clo_CreatedOn, datetime,>
+           ,@AdminGuid--<clo_CreatedBy, uniqueidentifier,>
+           ,null--addr.editdate--<clo_UpdatedOn, datetime,>
+           ,null--usr.userguid--<clo_UpdatedBy, uniqueidentifier,>
+           ,null--<clo_DeletedOn, datetime,>
+           ,null--<clo_DeletedBy, uniqueidentifier,>
+           ,null--<clo_SourceId, nvarchar(100),>
+           ,null--<clo_HouseNumber, nvarchar(10),>
+           ,null--<clo_HouseNumberSuffix, nvarchar(10),>
+           ,null--<clo_Street, nvarchar(30),>
+           ,null--<clo_RuralRoute, nvarchar(30),>
+           ,null--<clo_POBOX, nvarchar(10),>
+           ,null--<clo_Line2_std, nvarchar(50),>
+           ,null--<clo_Line3_std, nvarchar(50),>
+           ,null--<clo_Ward, nvarchar(10),>
+           ,null--<clo_EvenOdd, nchar(1),>
+           ,null--<clo_PreDirection, nchar(4),>
+           ,null--<clo_StreetSuffix, nchar(8),>
+           ,null--<clo_PostDirection, nchar(4),>
+           ,null--<clo_Line1_std, nvarchar(50),>
+           ,null--case autocorrect when 0 then 0 else null end--<clo_Standardized, bit,>
+           ,null--<clo_City_std, nvarchar(50),>
+           ,null--<clo_State_std, nvarchar(2),>)
+	from std_company
+	join std_companylocationtype on clt_text = 'Head Quarters' and clt_Deleted=0
+	where cmp_guid not in (select clo_cmp_guid from std_companylocation)
+
+update cc_sample..tblindividual
+set cloguid = clo_guid
+from std_companylocation
+join std_company
+	on clo_cmp_guid = cmp_guid and clo_headquarter=1 and clo_deleted=0 and cmp_deleted=0
+join cc_sample..tblindividual
+	on cmp_name = employer
+
+INSERT INTO [dbo].[std_Individual_CompanyLocation]
+           ([lio_GUID]            ,[lio_ind_GUID]            ,[lio_clo_GUID]            ,[lio_ict_GUID]            ,[lio_Default]            ,[lio_Deleted]            ,[lio_CreatedOn]            ,[lio_CreatedBy]            ,[lio_UpdatedOn]            ,[lio_UpdatedBy]            ,[lio_DeletedOn]            ,[lio_DeletedBy]            ,[lio_IsPrimaryContact]            ,[lio_lict_GUID]            ,[lio_licr_GUID])
+     SELECT
+           newid()--(<lio_GUID, uniqueidentifier,>
+           ,indguid--<lio_ind_GUID, uniqueidentifier,>
+           ,cloguid--<lio_clo_GUID, uniqueidentifier,>
+           ,(select top 1 ict_guid from std_individual_companylocationtype where ict_text = '')--<lio_ict_GUID, uniqueidentifier,>
+           ,1--<lio_Default, bit,>
+           ,0--<lio_Deleted, bit,>
+           ,getdate()--<lio_CreatedOn, datetime,>
+           ,@AdminGuid--<lio_CreatedBy, uniqueidentifier,>
+           ,null--<lio_UpdatedOn, datetime,>
+           ,null--<lio_UpdatedBy, uniqueidentifier,>
+           ,null--<lio_DeletedOn, datetime,>
+           ,null--<lio_DeletedBy, uniqueidentifier,>
+           ,null--<lio_IsPrimaryContact, bit,>
+           ,null--<lio_lict_GUID, uniqueidentifier,>
+           ,null--<lio_licr_GUID, uniqueidentifier,>)
+from cc_sample..tblindividual
+where indguid is not null and cloguid is not null
+
+
+
+--********************************************************************************
+--Convert data from BO..tblEvent to P7..std_Event
+--********************************************************************************
+
+INSERT INTO [dbo].[std_Event]            ([evt_GUID]            ,[evt_Text]            ,[evt_Description]            ,[evt_StartDate]            ,[evt_EndDate]            ,[evt_RSVPDate]            ,[evt_RSVPAddress1]            ,[evt_RSVPAddress2]            ,[evt_RSVPAddress3]            ,[evt_RSVPCity]            ,[evt_RSVPState]            ,[evt_RSVPZip]            ,[evt_RSVPZip4]            ,[evt_RSVPPostal]            ,[evt_RSVPPhone]            ,[evt_RSVPFAX]            ,[evt_RSVPEmail]            ,[evt_Contact]            ,[evt_Address1]            ,[evt_Address2]            ,[evt_Address3]            ,[evt_City]            ,[evt_State]            ,[evt_Zip]            ,[evt_Zip4]            ,[evt_Postal]            ,[evt_Phone]            ,[evt_FAX]            ,[evt_Email]            ,[evt_TargetAmountLower]            ,[evt_TargetAmountUpper]            ,[evt_TargetAudienceLower]            ,[evt_TargetAudienceUpper]            ,[evt_TargetActivityLower]            ,[evt_TargetActivityUpper]            ,[evt_Note]            ,[evt_AllowOther]            ,[evt_Deleted]            ,[evt_CreatedOn]            ,[evt_CreatedBy]            ,[evt_UpdatedOn]            ,[evt_UpdatedBy]            ,[evt_DeletedOn]            ,[evt_DeletedBy]            ,[evt_evy_GUID]            ,[evt_AmendmentCode]            ,[evt_ReceiptableCostTotal]            ,[evt_pcm_GUID]            ,[evt_IsPublic]            ,[evt_est_GUID]            ,[evt_IsValid]            ,[evt_BudgetAmount]            ,[evt_AppRequestCF]            ,[evt_bdr_guid]            ,[evt_NoOfAttendees]            ,[evt_TicketPrice]            ,[evt_EventType]            ,[evt_LowCostFundraiser]            ,[evt_bde_GUID])
+     SELECT 
+           evtguid--(<evt_GUID, uniqueidentifier,>
+           ,left(ltrim(evt.eventname),100)--<evt_Text, nvarchar(100),>
+           ,null--<evt_Description, nvarchar(250),>
+           ,isnull(evt.eventdate,evt.creationdate)--()--<evt_StartDate, datetime,>
+           ,isnull(evt.eventdate,evt.creationdate)--<evt_EndDate, datetime,>
+           ,null--<evt_RSVPDate, datetime,>
+           ,left(ltrim(m.adr1),50)--<evt_RSVPAddress1, nvarchar(50),>
+           ,left(ltrim(m.adr2),50)--null--<evt_RSVPAddress2, nvarchar(50),>
+           ,left(ltrim(m.company),50)--<evt_RSVPAddress3, nvarchar(50),>
+           ,left(ltrim(m.city),30)--<evt_RSVPCity, nvarchar(30),>
+           ,left(ltrim(m.[state]),2)--null--<evt_RSVPState, nvarchar(30),>
+           ,case when isnull(m.zip,'')>'' and len(ltrim(rtrim(m.zip)))<5
+						then right(replicate('0',5)+ltrim(isnull(rtrim(m.[zip]),'')),5)
+					when isnull(m.zip,'')>'' and len(ltrim(m.zip)) in (9,10)
+						then left(ltrim(isnull(m.zip,'')),5)
+					else left(ltrim(isnull(m.zip,'')),10) end--null--<evt_RSVPm.zip, nvarchar(10),>
+           ,case when isnull(m.zip,'')>'' and len(m.zip)<5
+						then ''
+					when isnull(m.zip,'')>'' and len(m.zip) in (9,10)
+						then right(rtrim(m.zip),4)
+					else '' end--<evt_RSVPZip4, nvarchar(4),>
+           ,null--<evt_RSVPPostal, nvarchar(10),>
+           ,null--<evt_RSVPPhone, nvarchar(20),>
+           ,null--<evt_RSVPFAX, nvarchar(20),>
+           ,null--<evt_RSVPEmail, nvarchar(250),>
+           ,isnull((Select top 1 ltrim(left(isnull(FirstName,''),60))+' '+ltrim(left(isnull(LastName,''),60)) 
+					from cc_sample..tblindividual
+					join cc_sample..tblrecords on seq_id=individ and type=1
+					join cc_sample..tblrecordtorecord on recid=recid2 and recordtorecordtypeid in (2,13)
+					where recid1 = evt.recid
+					order by recordtorecordtypeid
+				    ),'')--<evt_Contact, nvarchar(200),>
+           ,left(ltrim(p.adr1),50)--<evt_Address1, nvarchar(50),>
+           ,left(ltrim(p.adr2),50)--<evt_Address2, nvarchar(50),>
+           ,left(ltrim(p.company),50)--<evt_Address3, nvarchar(50),>
+           ,left(ltrim(p.city),30)--<evt_City, nvarchar(30),>
+           ,left(ltrim(p.[state]),2)--<evt_State, nvarchar(30),>
+           ,case when isnull(p.zip,'')>'' and len(ltrim(rtrim(p.zip)))<5
+						then right(replicate('0',5)+ltrim(isnull(rtrim(p.[zip]),'')),5)
+					when isnull(p.zip,'')>'' and len(ltrim(p.zip)) in (9,10)
+						then left(ltrim(isnull(p.zip,'')),5)
+					else left(ltrim(isnull(p.zip,'')),10) end--<evt_Zip, nvarchar(10),>
+           ,case when isnull(p.zip,'')>'' and len(p.zip)<5
+						then ''
+					when isnull(p.zip,'')>'' and len(p.zip) in (9,10)
+						then right(rtrim(p.zip),4)
+					else '' end--<evt_Zip4, nvarchar(4),>
+           ,null--<evt_Postal, nvarchar(10),>
+           ,null--<evt_Phone, nvarchar(20),>
+           ,null--<evt_FAX, nvarchar(20),>
+           ,null--<evt_Email, nvarchar(250),>
+           ,null--<evt_TargetAmountLower, money,>
+           ,null--<evt_TargetAmountUpper, money,>
+           ,null--<evt_TargetAudienceLower, int,>
+           ,null--<evt_TargetAudienceUpper, int,>
+           ,null--<evt_TargetActivityLower, int,>
+           ,null--<evt_TargetActivityUpper, int,>
+           ,null--<evt_Note, ntext,>
+           ,null--<evt_AllowOther, bit,>
+           ,case active when 0 then 1 else 0 end--<evt_Deleted, bit,>
+           ,isnull(evt.creationdate,getdate())--<evt_CreatedOn, datetime,>
+           ,@AdminGuid--<evt_CreatedBy, uniqueidentifier,>
+           ,evt.editdate--<evt_UpdatedOn, datetime,>
+           ,evt.editorguid--<evt_UpdatedBy, uniqueidentifier,>
+           ,case active when 0 then evt.editdate end--<evt_DeletedOn, datetime,>
+           ,case active when 0 then evt.editorguid end--<evt_DeletedBy, uniqueidentifier,>
+           ,null--<evt_evy_GUID, uniqueidentifier,>
+           ,null--<evt_AmendmentCode, nvarchar(3),>
+           ,null--<evt_ReceiptableCostTotal, money,>
+           ,null--<evt_pcm_GUID, uniqueidentifier,>
+           ,null--<evt_IsPublic, bit,>
+           ,null--<evt_est_GUID, uniqueidentifier,>
+           ,null--<evt_IsValid, bit,>
+           ,0.00--<evt_BudgetAmount, money,>
+           ,0--<evt_AppRequestCF, bit,>
+           ,null--<evt_bdr_guid, uniqueidentifier,>
+           ,null----<evt_NoOfAttendees, int,>
+           ,null--<evt_TicketPrice, money,>
+           ,null--<evt_EventType, nvarchar(200),>
+           ,0--<evt_LowCostFundraiser, bit,>
+           ,null--<evt_bde_GUID, uniqueidentifier,>)
+		from cc_sample..tblEvent evt
+		left join cc_sample..tblAddress m on m.Recid=evt.recid and m.mailingaddress=1
+		left join cc_sample..tblAddress p on p.Recid=evt.recid and p.primaryaddress=1
+
+--------------------
+--other event address
+--------------------
+
+INSERT INTO [dbo].[std7_EventLocation]
+           ([elo_GUID]            ,[elo_evt_GUID]            ,[elo_Name]            ,[elo_Line1]            ,[elo_Line2]            ,[elo_Line3]            ,[elo_City]            ,[elo_State]            ,[elo_Zip5]            ,[elo_Zip4]            ,[elo_Postal]            ,[elo_Crrt]            ,[elo_DPT]            ,[elo_Tract]            ,[elo_Block]            ,[elo_Lat]            ,[elo_Long]            ,[elo_Phone]            ,[elo_Fax]            ,[elo_EMail]            ,[elo_CountyFips]            ,[elo_County]            ,[elo_Congress]            ,[elo_Senate]            ,[elo_Legislature]            ,[elo_PrecinctCode]            ,[elo_PrecinctName]            ,[elo_Default]            ,[elo_Deleted]            ,[elo_CreatedOn]            ,[elo_CreatedBy]            ,[elo_UpdatedOn]            ,[elo_UpdatedBy]            ,[elo_DeletedOn]            ,[elo_DeletedBy]            ,[elo_SourceId]            ,[elo_HouseNumber]            ,[elo_HouseNumberSuffix]            ,[elo_Street]            ,[elo_RuralRoute]            ,[elo_POBOX]            ,[elo_Line2_std]            ,[elo_Line3_std]            ,[elo_Ward]            ,[elo_EvenOdd]            ,[elo_PreDirection]            ,[elo_StreetSuffix]            ,[elo_PostDirection]            ,[elo_Line1_std]            ,[elo_Standardized]            ,[elo_City_std]            ,[elo_State_std])
+     SELECT
+           ta.adrguid--(<elo_GUID, uniqueidentifier,>
+           ,te.evtguid--<elo_evt_GUID, uniqueidentifier,>
+           ,left(ltrim(isnull(ta.company,'')),100)--<elo_Name, nvarchar(100),>
+           ,left(ltrim(isnull(ta.adr1,'')),100)--<elo_Line1, nvarchar(50),>
+           ,left(ltrim(isnull(ta.adr2,'')),100)--<elo_Line2, nvarchar(50),>
+           ,''--<elo_Line3, nvarchar(50),>
+           ,left(ltrim(isnull(ta.city,'')),100)--<elo_City, nvarchar(50),>
+           ,left(ltrim(isnull(ta.state,'')),100)--<elo_State, nvarchar(2),>
+           ,case when isnull(ta.zip,'')>'' and len(ltrim(rtrim(ta.zip)))<5
+						then right(replicate('0',5)+ltrim(isnull(rtrim(ta.[zip]),'')),5)
+					when isnull(ta.zip,'')>'' and len(ltrim(ta.zip)) in (9,10)
+						then left(ltrim(isnull(ta.zip,'')),5)
+					else left(ltrim(isnull(ta.zip,'')),10) end--<elo_Zip5, nvarchar(10),>
+           ,case when isnull(ta.zip,'')>'' and len(ta.zip)<5
+						then ''
+					when isnull(ta.zip,'')>'' and len(ta.zip) in (9,10)
+						then right(rtrim(ta.zip),4)
+					else '' end--<elo_Zip4, nchar(4),>
+           ,null--<elo_Postal, nvarchar(10),>
+           ,left(ltrim(carrierroute),4)----<elo_Crrt, nchar(4),>
+           ,null--<elo_DPT, nchar(3),>
+           ,null--<elo_Tract, nchar(6),>
+           ,null--<elo_Block, nchar(4),>
+           ,null--<elo_Lat, float,>
+           ,null--<elo_Long, float,>
+           ,null--<elo_Phone, nvarchar(20),>
+           ,null--<elo_Fax, nvarchar(20),>
+           ,null--<elo_EMail, nvarchar(100),>
+           ,null--<elo_CountyFips, nchar(3),>
+           ,left(ltrim(county),50)---<elo_County, nvarchar(50),>
+           ,left(ltrim(congdist),2)--<elo_Congress, nchar(2),>
+           ,left(ltrim(ta.statesenate),10)--<elo_Senate, nvarchar(10),>
+           ,left(ltrim(statehouse),10)----<elo_Legislature, nvarchar(10),>
+           ,null--<elo_PrecinctCode, nvarchar(10),>
+           ,''--<elo_PrecinctName, nvarchar(50),>
+           ,0--<elo_Default, bit,>
+           ,0--<elo_Deleted, bit,>
+           ,isnull(ta.CreationDate,getdate())--<elo_CreatedOn, datetime,>
+           ,@AdminGuid--<elo_CreatedBy, uniqueidentifier,>
+           ,ta.editdate--<elo_UpdatedOn, datetime,>
+           ,tu.userguid--<elo_UpdatedBy, uniqueidentifier,>
+           ,null--<elo_DeletedOn, datetime,>
+           ,null--<elo_DeletedBy, uniqueidentifier,>
+           ,null--<elo_SourceId, nvarchar(100),>
+           ,null--<elo_HouseNumber, nvarchar(10),>
+           ,null--<elo_HouseNumberSuffix, nvarchar(10),>
+           ,null--<elo_Street, nvarchar(30),>
+           ,null--<elo_RuralRoute, nvarchar(30),>
+           ,null--<elo_POBOX, nvarchar(10),>
+           ,null--<elo_Line2_std, nvarchar(50),>
+           ,null--<elo_Line3_std, nvarchar(50),>
+           ,null--<elo_Ward, nvarchar(10),>
+           ,null--elo_EvenOdd, nchar(1),>
+           ,null--<elo_PreDirection, nchar(4),>
+           ,null--<elo_StreetSuffix, nchar(8),>
+           ,null--<elo_PostDirection, nchar(4),>
+           ,null--<elo_Line1_std, nvarchar(50),>
+           ,case autocorrect when 0 then 0 else null end--<elo_Standardized, bit,>
+           ,null--<elo_City_std, nvarchar(50),>
+           ,null--<elo_State_std, nvarchar(2),>)
+	from cc_sample..tblEvent te
+		join cc_sample..tblAddress ta on ta.Recid=te.recid and ta.mailingaddress=0 and primaryaddress=0
+		left join cc_sample..tbluser tu on tu.userid = ta.editor
+		
+
+---------------
+--event attendees
+---------------
+update cc_sample.[dbo].[tblRecordToRecordType]
+set eltguidT = newid(), compliance=0
+where usagetype like '%event%'
+
+--host types
+INSERT INTO [dbo].[std_Event_IndividualType]
+           ([eit_GUID]            ,[eit_Text] 		  ,[eit_IsHost]            ,[eit_Default]            ,[eit_Deleted]            ,[eit_CreatedOn]            ,[eit_CreatedBy]            ,[eit_UpdatedOn]            ,[eit_UpdatedBy]            ,[eit_DeletedOn]            ,[eit_DeletedBy])
+	select      
+           eltguidT--(<eit_GUID, uniqueidentifier,>
+           ,recordtorecordtype--<eit_Text, nvarchar(100),>
+		   ,1--
+           ,0--<eit_Default, bit,>
+           ,0--<eit_Deleted, bit,>
+           ,getdate()--<eit_CreatedOn, datetime,>
+           ,@AdminGuid--<eit_CreatedBy, uniqueidentifier,>
+           ,null--<eit_UpdatedOn, datetime,>
+           ,null--<eit_UpdatedBy, uniqueidentifier,>
+           ,null--<eit_DeletedOn, datetime,>
+           ,null--<eit_DeletedBy, uniqueidentifier,>)
+	 from cc_sample.[dbo].[tblRecordToRecordType]
+     where usagetype like '%event%'
+	 and recordtorecordtype not in (select eit_text from std_event_individualtype)
+
+--hosts
+	INSERT INTO [dbo].[std_Event_Individual]
+           ([lei_GUID]            ,[lei_evt_GUID]            ,[lei_ind_GUID]            ,[lei_ScheduleDate]            ,[lei_Date]            ,[lei_TargetAmount]            ,[lei_RequestAmount]            ,[lei_PledgeAmount]            ,[lei_ExpectDate]            ,[lei_eit_GUID]            ,[lei_eis_GUID]            ,[lei_Link_GUID]            ,[lei_Deleted]            ,[lei_CreatedOn]            ,[lei_CreatedBy]            ,[lei_UpdatedOn]            ,[lei_UpdatedBy]            ,[lei_DeletedOn]            ,[lei_DeletedBy]            ,[lei_AskToRaiseAmount]            ,[lei_Note]            ,[lei_eay_GUID]            ,[lei_age_GUID]            ,[lei_pcm_GUID]            ,[lei_evp_GUID]            ,[lei_Organization]            ,[lei_AttendeeTitle]            ,[lei_evs_guid])
+     Select
+           newid()--(<lei_GUID, uniqueidentifier,>
+           ,evtguid--<lei_evt_GUID, uniqueidentifier,>
+           ,indguid--<lei_ind_GUID, uniqueidentifier,>
+           ,getdate()--<lei_ScheduleDate, datetime,>
+           ,null--<lei_Date, datetime,>
+           ,0--<lei_TargetAmount, money,>
+           ,0--<lei_RequestAmount, money,>
+           ,0--<lei_PledgeAmount, money,>
+           ,0--<lei_ExpectDate, datetime,>
+           ,NULL--<lei_eit_GUID, uniqueidentifier,>
+           ,NULL--<lei_eis_GUID, uniqueidentifier,>
+           ,NULL--<lei_Link_GUID, uniqueidentifier,>
+           ,0--<lei_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<lei_CreatedOn, datetime,>
+           ,@AdminGuid--<lei_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<lei_UpdatedOn, datetime,>
+           ,tu.userguid--<lei_UpdatedBy, uniqueidentifier,>
+           ,null--<lei_DeletedOn, datetime,>
+           ,null--<lei_DeletedBy, uniqueidentifier,>
+           ,null--<lei_AskToRaiseAmount, money,>
+           ,''--r2e.comments--<lei_Note, ntext,>
+           ,null--<lei_eay_GUID, uniqueidentifier,>
+           ,null--<lei_age_GUID, uniqueidentifier,>
+           ,null--<lei_pcm_GUID, uniqueidentifier,>
+           ,null--<lei_evp_GUID, uniqueidentifier,>
+           ,null--<lei_Organization, nvarchar(250),>
+           ,null--<lei_AttendeeTitle, nvarchar(250),>
+           ,evs_guid--  <lei_evs_guid, uniqueidentifier,>)
+	  from cc_sample..tblrecordtorecord r2r
+	  join cc_sample.[dbo].[tblRecordToRecordType] r2rt
+			on usagetype like '%event%' and r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	  join std_event_individualtype
+		on eit_text = r2rt.recordtorecordtype and eit_Deleted=0
+	  left join cc_sample..tbluser tu
+		on tu.userid=r2r.editor
+	  join cc_sample..tblevent te
+		on te.recid = r2r.recid1
+      join cc_sample..tblrecords tr
+		on tr.recid = r2r.recid2 and type=1
+	  join cc_sample..tblindividual ti
+		on ti.individ = tr.seq_id
+	  join [std7_EventStatus]
+		on evs_deleted=0 and evs_text ='No Response'
+
+--attendee type if missing
+INSERT INTO [dbo].[std_Event_IndividualType]
+           ([eit_GUID]            ,[eit_Text] 		 ,[eit_IsHost]            ,[eit_Default]            ,[eit_Deleted]            ,[eit_CreatedOn]            ,[eit_CreatedBy]            ,[eit_UpdatedOn]            ,[eit_UpdatedBy]            ,[eit_DeletedOn]            ,[eit_DeletedBy])
+	select      
+           newid()--(<eit_GUID, uniqueidentifier,>
+           ,'Attendee'--<eit_Text, nvarchar(100),>
+		   ,0--
+           ,1--<eit_Default, bit,>
+           ,0--<eit_Deleted, bit,>
+           ,getdate()--<eit_CreatedOn, datetime,>
+           ,@AdminGuid--<eit_CreatedBy, uniqueidentifier,>
+           ,null--<eit_UpdatedOn, datetime,>
+           ,null--<eit_UpdatedBy, uniqueidentifier,>
+           ,null--<eit_DeletedOn, datetime,>
+           ,null--<eit_DeletedBy, uniqueidentifier,>)
+	 where 'Attendee' not in (select eit_text from std_event_individualtype)
+
+--attendees
+	INSERT INTO [dbo].[std_Event_Individual]
+           ([lei_GUID]            ,[lei_evt_GUID]            ,[lei_ind_GUID]            ,[lei_ScheduleDate]            ,[lei_Date]            ,[lei_TargetAmount]            ,[lei_RequestAmount]            ,[lei_PledgeAmount]            ,[lei_ExpectDate]            ,[lei_eit_GUID]            ,[lei_eis_GUID]            ,[lei_Link_GUID]            ,[lei_Deleted]            ,[lei_CreatedOn]            ,[lei_CreatedBy]            ,[lei_UpdatedOn]            ,[lei_UpdatedBy]            ,[lei_DeletedOn]            ,[lei_DeletedBy]            ,[lei_AskToRaiseAmount]            ,[lei_Note]            ,[lei_eay_GUID]            ,[lei_age_GUID]            ,[lei_pcm_GUID]            ,[lei_evp_GUID]            ,[lei_Organization]            ,[lei_AttendeeTitle]            ,[lei_evs_guid])
+     Select
+           newid()--(<lei_GUID, uniqueidentifier,>
+           ,evtguid--<lei_evt_GUID, uniqueidentifier,>
+           ,indguid--<lei_ind_GUID, uniqueidentifier,>
+           ,getdate()--<lei_ScheduleDate, datetime,>
+           ,null--<lei_Date, datetime,>
+           ,0--<lei_TargetAmount, money,>
+           ,0--<lei_RequestAmount, money,>
+           ,0--<lei_PledgeAmount, money,>
+           ,0--<lei_ExpectDate, datetime,>
+           ,eit_guid--<lei_eit_GUID, uniqueidentifier,>
+           ,NULL--<lei_eis_GUID, uniqueidentifier,>
+           ,NULL--<lei_Link_GUID, uniqueidentifier,>
+           ,0--<lei_Deleted, bit,>
+           ,isnull(r2e.creationdate,getdate())--<lei_CreatedOn, datetime,>
+           ,@AdminGuid--<lei_CreatedBy, uniqueidentifier,>
+           ,r2e.editdate--<lei_UpdatedOn, datetime,>
+           ,tu.userguid--<lei_UpdatedBy, uniqueidentifier,>
+           ,null--<lei_DeletedOn, datetime,>
+           ,null--<lei_DeletedBy, uniqueidentifier,>
+           ,null--<lei_AskToRaiseAmount, money,>
+           ,r2e.comments--<lei_Note, ntext,>
+           ,null--<lei_eay_GUID, uniqueidentifier,>
+           ,null--<lei_age_GUID, uniqueidentifier,>
+           ,null--<lei_pcm_GUID, uniqueidentifier,>
+           ,null--<lei_evp_GUID, uniqueidentifier,>
+           ,null--<lei_Organization, nvarchar(250),>
+           ,null--<lei_AttendeeTitle, nvarchar(250),>
+           ,evs_guid--  <lei_evs_guid, uniqueidentifier,>)
+	  from cc_sample..tblrecordtoevent r2e
+	  join [std7_EventStatus]
+		on evs_deleted=0 and evs_text = case r2e.rsvpoptionid when 3 then 'Maybe'
+								 when 2 then 'No'
+								 when 1 then 'Yes'
+								 else 'No Response' end
+	  left join cc_sample..tbluser tu
+		on tu.userid=r2e.editor
+	  join cc_sample..tblevent te
+		on te.recid = r2e.eventrecid
+      join cc_sample..tblrecords tr
+		on tr.recid = r2e.entityrecid and type=1
+	  join cc_sample..tblindividual ti
+		on ti.individ = tr.seq_id
+	  join std_event_individualtype
+		on eit_text = 'Attendee' and eit_Deleted=0
+      left join [std_Event_Individual]
+		on ti.indguid = lei_ind_guid and lei_deleted=0 and lei_evt_guid =te.evtguid
+	  where lei_guid is null
+
+--update event status for hosts that are also attendees	
+update [std_Event_Individual]
+set lei_evs_guid = evs_guid
+from [std_Event_Individual]
+join cc_sample..tblevent te
+	on te.evtguid =lei_evt_guid	
+join cc_sample..tblrecordtoevent r2e
+	on te.recid = r2e.eventrecid
+join cc_sample..tblrecords tr
+		on tr.recid = r2e.entityrecid and type=1
+join cc_sample..tblindividual ti
+		on ti.individ = tr.seq_id and ti.indguid = lei_evt_guid
+join [std7_EventStatus]
+		on evs_deleted=0 and evs_text = case r2e.rsvpoptionid when 3 then 'Maybe'
+								 when 2 then 'No'
+								 when 1 then 'Yes'
+								 else 'No Response' end
+where lei_evs_guid <> evs_guid
+
+--org
+	INSERT INTO [dbo].[std_Event_Organization]
+           ([leo_GUID]            ,[leo_evt_GUID]            ,[leo_org_GUID]            ,[leo_ScheduleDate]            ,[leo_ActualDate]            ,[leo_TargetAmount]            ,[leo_RequestAmount]            ,[leo_AskToRaiseAmount]            ,[leo_eot_GUID]            ,[leo_eos_GUID]            ,[leo_Link_GUID]            ,[leo_Deleted]            ,[leo_CreatedOn]            ,[leo_CreatedBy]            ,[leo_UpdatedOn]            ,[leo_UpdatedBy]            ,[leo_DeletedOn]            ,[leo_DeletedBy]            ,[leo_eay_GUID]            ,[leo_age_GUID]            ,[leo_Note]            ,[leo_evp_GUID]            ,[leo_Organization]            ,[leo_AttendeeTitle]            ,[leo_evs_guid])
+     SELECT
+           newid()--(<leo_GUID, uniqueidentifier,>
+           ,evtguid--<leo_evt_GUID, uniqueidentifier,>
+           ,orgguid--<leo_org_GUID, uniqueidentifier,>
+           ,getdate()--<leo_ScheduleDate, datetime,>
+           ,null--<leo_ActualDate, datetime,>
+           ,null--<leo_TargetAmount, money,>
+           ,null--<leo_RequestAmount, money,>
+           ,null--<leo_AskToRaiseAmount, money,>
+           ,null--<leo_eot_GUID, uniqueidentifier,>
+           ,null--<leo_eos_GUID, uniqueidentifier,>
+           ,null--<leo_Link_GUID, uniqueidentifier,>
+           ,0--<leo_Deleted, bit,>
+           ,isnull(r2e.creationdate,getdate())--<leo_CreatedOn, datetime,>
+           ,@AdminGuid--<leo_CreatedBy, uniqueidentifier,>
+           ,r2e.editdate--<leo_UpdatedOn, datetime,>
+           ,tu.userguid--<leo_UpdatedBy, uniqueidentifier,>
+           ,null--<leo_DeletedOn, datetime,>
+           ,null--<leo_DeletedBy, uniqueidentifier,>
+           ,null--<leo_eay_GUID, uniqueidentifier,>
+           ,null--<leo_age_GUID, uniqueidentifier,>
+           ,r2e.comments--<leo_Note, ntext,>
+           ,null--<leo_evp_GUID, uniqueidentifier,>
+           ,null--<leo_Organization, nvarchar(250),>
+           ,null--<leo_AttendeeTitle, nvarchar(250),>
+           ,evs_guid--<leo_evs_guid, uniqueidentifier,>)
+	  from cc_sample..tblrecordtoevent r2e
+	  join [std7_EventStatus]
+		on evs_deleted=0 and evs_text = case r2e.rsvpoptionid when 3 then 'Maybe'
+								 when 2 then 'No'
+								 when 1 then 'Yes'
+								 else 'No Response' end
+	  left join cc_sample..tbluser tu
+		on tu.userid=r2e.editor
+	  join cc_sample..tblevent te
+		on te.recid = r2e.eventrecid
+      join cc_sample..tblrecords tr
+		on tr.recid = r2e.entityrecid and type=2
+	  join cc_sample..tblorganization ti
+		on ti.orgid = tr.seq_id and committee=0
+--pcm
+INSERT INTO [dbo].[std_Event_PoliticalCommittee]
+           ([lep_GUID]            ,[lep_evt_GUID]            ,[lep_pcm_GUID]            ,[lep_ScheduleDate]            ,[lep_ActualDate]            ,[lep_TargetAmount]            ,[lep_RequestAmount]            ,[lep_AskToRaiseAmount]            ,[lep_ept_GUID]            ,[lep_eps_GUID]            ,[lep_Link_GUID]            ,[lep_Deleted]            ,[lep_CreatedOn]            ,[lep_CreatedBy]            ,[lep_UpdatedOn]            ,[lep_UpdatedBy]            ,[lep_DeletedOn]            ,[lep_DeletedBy]            ,[lep_Note]            ,[lep_eay_GUID]            ,[lep_age_GUID]            ,[lep_evp_GUID]            ,[lep_Organization]            ,[lep_AttendeeTitle]            ,[lep_evs_guid])
+	SELECT
+           newid()--(<lep_GUID, uniqueidentifier,>
+           ,evtguid--<lep_evt_GUID, uniqueidentifier,>
+           ,orgguid--<lep_pcm_GUID, uniqueidentifier,>
+           ,getdate()--<lep_ScheduleDate, datetime,>
+           ,null--<lep_ActualDate, datetime,>
+           ,null--<lep_TargetAmount, money,>
+           ,null--<lep_RequestAmount, money,>
+           ,null--<lep_AskToRaiseAmount, money,>
+           ,null--<lep_ept_GUID, uniqueidentifier,>
+           ,null--<lep_eps_GUID, uniqueidentifier,>
+           ,null--<lep_Link_GUID, uniqueidentifier,>
+           ,0--<lep_Deleted, bit,>
+           ,isnull(r2e.creationdate,getdate())--<leo_CreatedOn, datetime,>
+           ,@AdminGuid--<leo_CreatedBy, uniqueidentifier,>
+           ,r2e.editdate--<leo_UpdatedOn, datetime,>
+           ,tu.userguid--<leo_UpdatedBy, uniqueidentifier,>
+           ,null--<lep_DeletedOn, datetime,>
+           ,null--<lep_DeletedBy, uniqueidentifier,>
+           ,r2e.comments--<lep_Note, ntext,>
+           ,null--<lep_eay_GUID, uniqueidentifier,>
+           ,null--<nulllep_age_GUID, uniqueidentifier,>
+           ,null--<lep_evp_GUID, uniqueidentifier,>
+           ,null--<lep_Organization, nvarchar(250),>
+           ,null--<lep_AttendeeTitle, nvarchar(250),>
+           ,evs_guid--<lep_evs_guid, uniqueidentifier,>)
+ from cc_sample..tblrecordtoevent r2e
+	  join [std7_EventStatus]
+		on evs_deleted=0 and evs_text = case r2e.rsvpoptionid when 3 then 'Maybe'
+								 when 2 then 'No'
+								 when 1 then 'Yes'
+								 else 'No Response' end
+	  left join cc_sample..tbluser tu
+		on tu.userid=r2e.editor
+	  join cc_sample..tblevent te
+		on te.recid = r2e.eventrecid
+      join cc_sample..tblrecords tr
+		on tr.recid = r2e.entityrecid and type=2
+	  join cc_sample..tblorganization ti
+		on ti.orgid = tr.seq_id and committee=1
+
+------------------
+--affiliations / connections
+------------------
+--DECLARE @AdminGuid uniqueidentifier
+--select top 1 @AdminGuid = usr_guid from std_user where usr_name = 'Admin' and usr_Deleted = 0
+----remove all links for repopulation (use only for resetting a database to default status)
+--delete from std_PoliticalCommittee_Individual
+--delete from [std_PoliticalCommittee_IndividualType]
+--delete from [std_PoliticalCommittee_Organization]
+--delete from [std_PoliticalCommittee_OrganizationType]
+--delete from [std_PoliticalCommitteeAffiliation]
+--delete from [std_PoliticalCommittee_Affiliation]
+--delete from [std_PoliticalCommittee_AffiliationType]
+--delete from [std_PoliticalCommitteeAffiliationType]
+--delete from std7_entitylinkpair where elp_fromlinktype_guid in (select elt_guid from std_entitylinktype join std_entitylinktypegroup on elt_elg_guid = elg_guid and elg_text='Compliance')
+--									  or elp_tolinktype_guid in (select elt_guid from std_entitylinktype join std_entitylinktypegroup on elt_elg_guid = elg_guid and elg_text='Compliance')
+--delete from std_entitylink_individual where eli_elt_guid in (select elt_guid from std_entitylinktype join std_entitylinktypegroup on elt_elg_guid = elg_guid and elg_text='Compliance')
+--delete from std_entitylink_company where elc_elt_guid in (select elt_guid from std_entitylinktype join std_entitylinktypegroup on elt_elg_guid = elg_guid and elg_text='Compliance')
+--delete from std_entitylink_politicalcommittee where elp_elt_guid in (select elt_guid from std_entitylinktype join std_entitylinktypegroup on elt_elg_guid = elg_guid and elg_text='Compliance')
+--delete from std_entitylinktype where elt_guid in (select elt_guid from std_entitylinktype join std_entitylinktypegroup on elt_elg_guid = elg_guid and elg_text='Compliance')
+
+update cc_sample..tblrecordtorecordtype
+set eltguidC = null, eltguidT = null, eltguidF = null, compliance =null
+
+---ensure compliance types exist
+insert [std_PoliticalCommittee_IndividualType]
+select * from [hvv-360camdb1].[model].dbo.[std_PoliticalCommittee_IndividualType]
+where lpt_text not in (Select lpt_text from [std_PoliticalCommittee_IndividualType]
+								where lpt_deleted=0)
+insert [std_PoliticalCommittee_OrganizationType]
+select * from  [hvv-360camdb1].[model].dbo.[std_PoliticalCommittee_OrganizationType]
+where lpy_text not in (Select lpy_text from [std_PoliticalCommittee_OrganizationType]
+								where lpy_deleted=0)
+insert [std_PoliticalCommittee_AffiliationType]
+select * from [hvv-360camdb1].[model].dbo.[std_PoliticalCommittee_AffiliationType]
+where pay_text not in (Select pay_text from [std_PoliticalCommittee_AffiliationType]
+								where pay_deleted=0)
+insert [std_PoliticalCommitteeAffiliationType] (pat_guid,pat_text,pat_default,pat_deleted,pat_createdon,pat_createdby)
+select pat_guid,pat_text,pat_default,pat_deleted,pat_createdon,pat_createdby 
+	from [hvv-360camdb1].[model].dbo.[std_PoliticalCommitteeAffiliationType]
+where pat_text not in (Select pat_text from [std_PoliticalCommitteeAffiliationType]
+								where pat_deleted=0)
+
+
+
+--ensure entitylinktypes exist for compliance types
+INSERT INTO [dbo].[std7_EntityLinkDirection]
+           ([eld_GUID]            ,[eld_Text]            ,[eld_FromEntityType_GUID]            ,[eld_ToEntityType_GUID]            ,[eld_Deleted]            ,[eld_CreatedOn]            ,[eld_CreatedBy]            ,[eld_UpdatedOn]            ,[eld_UpdatedBy]            ,[eld_DeletedOn]            ,[eld_DeletedBy]            ,[eld_DisplayOrder])
+           SELECT
+			newid()--(<eld_GUID, uniqueidentifier,>
+           ,'Committee-Individual'--<eld_Text, nvarchar(100),>
+           ,f.eti_guid--<eld_FromEntityType_GUID, uniqueidentifier,>
+           ,t.eti_guid--<eld_ToEntityType_GUID, uniqueidentifier,>
+           ,0--<eld_Deleted, bit,>
+           ,getdate()--<eld_CreatedOn, datetime,>
+           ,@AdminGuid--<eld_CreatedBy, uniqueidentifier,>
+           ,null--<eld_UpdatedOn, datetime,>
+           ,null--<eld_UpdatedBy, uniqueidentifier,>
+           ,null--<eld_DeletedOn, datetime,>
+           ,null--<eld_DeletedBy, uniqueidentifier,>
+           ,4--<eld_DisplayOrder, int,>)
+		  from std_entity f  
+		  join std_entity t 
+			on f.eti_text='company' and f.eti_deleted=0
+			and t.eti_text='individual' and t.eti_deleted=0
+		  where 'Committee-Individual' not in (select eld_text from std7_entitylinkdirection where eld_deleted=0)
+   UNION SELECT
+			newid()--(<eld_GUID, uniqueidentifier,>
+           ,'Committee-Company'--<eld_Text, nvarchar(100),>
+           ,f.eti_guid--<eld_FromEntityType_GUID, uniqueidentifier,>
+           ,t.eti_guid--<eld_ToEntityType_GUID, uniqueidentifier,>
+           ,0--<eld_Deleted, bit,>
+           ,getdate()--<eld_CreatedOn, datetime,>
+           ,@AdminGuid--<eld_CreatedBy, uniqueidentifier,>
+           ,null--<eld_UpdatedOn, datetime,>
+           ,null--<eld_UpdatedBy, uniqueidentifier,>
+           ,null--<eld_DeletedOn, datetime,>
+           ,null--<eld_DeletedBy, uniqueidentifier,>
+           ,4--<eld_DisplayOrder, int,>)
+		  from std_entity f  
+		  join std_entity t 
+			on f.eti_text='company' and f.eti_deleted=0
+			and t.eti_text='company' and t.eti_deleted=0
+		  where 'Committee-Company' not in (select eld_text from std7_entitylinkdirection where eld_deleted=0)
+	UNION SELECT
+			newid()--(<eld_GUID, uniqueidentifier,>
+           ,'Committee-Committee'--<eld_Text, nvarchar(100),>
+           ,f.eti_guid--<eld_FromEntityType_GUID, uniqueidentifier,>
+           ,t.eti_guid--<eld_ToEntityType_GUID, uniqueidentifier,>
+           ,0--<eld_Deleted, bit,>
+           ,getdate()--<eld_CreatedOn, datetime,>
+           ,@AdminGuid--<eld_CreatedBy, uniqueidentifier,>
+           ,null--<eld_UpdatedOn, datetime,>
+           ,null--<eld_UpdatedBy, uniqueidentifier,>
+           ,null--<eld_DeletedOn, datetime,>
+           ,null--<eld_DeletedBy, uniqueidentifier,>
+           ,4--<eld_DisplayOrder, int,>)
+		  from std_entity f  
+		  join std_entity t 
+			on f.eti_text='company' and f.eti_deleted=0
+			and t.eti_text='company' and t.eti_deleted=0
+		  where 'Committee-Committee' not in (select eld_text from std7_entitylinkdirection where eld_deleted=0)
+
+declare @entitylink table
+(
+eltguidt uniqueidentifier
+,elttextT varchar(200)
+,eltguidF uniqueidentifier
+,elttextF varchar(200)
+,eldtext varchar(100)
+)
+
+insert @entitylink 
+select newid() eltguidT, lpt_text elttextT, newid() eltguidF, '' elttextF, 'Committee-Individual' eldtext
+from [std_PoliticalCommittee_IndividualType]
+where lpt_text not in (select elt_text from std_entitylinktype
+						join std_entitylinktypegroup
+							on elg_text = 'Compliance' and elg_deleted=0 and elg_guid = elt_elg_guid
+						join std7_entitylinkpair
+							on elp_tolinktype_guid = elt_guid
+						join std7_entitylinkdirection
+							on elp_eld_guid = eld_guid and eld_text = 'Committee-Individual' and eld_deleted = 0)
+union all
+select newid() eltguidT, lpy_text elttextT, newid() eltguidF, '' elttextF, 'Committee-Company' eldtext
+from [std_PoliticalCommittee_OrganizationType]
+where lpy_text not in (select elt_text from std_entitylinktype
+						join std_entitylinktypegroup
+							on elg_text = 'Compliance' and elg_deleted=0 and elg_guid = elt_elg_guid
+						join std7_entitylinkpair
+							on elp_tolinktype_guid = elt_guid
+						join std7_entitylinkdirection
+							on elp_eld_guid = eld_guid and eld_text = 'Committee-Company' and eld_deleted = 0)
+union all
+select newid() eltguidT, pay_text elttextT, newid() eltguidF, '' elttextF, 'Committee-Committee' eldtext
+from [std_PoliticalCommittee_AffiliationType]
+where pay_text not in (select elt_text from std_entitylinktype
+						join std_entitylinktypegroup
+							on elg_text = 'Compliance' and elg_deleted=0 and elg_guid = elt_elg_guid
+						join std7_entitylinkpair
+							on elp_tolinktype_guid = elt_guid
+						join std7_entitylinkdirection
+							on elp_eld_guid = eld_guid and eld_text = 'Committee-Committee' and eld_deleted = 0)
+
+INSERT INTO [dbo].[std_EntityLinkType]
+           ([elt_GUID]            ,[elt_Text]            ,[elt_CounterType_GUID]            ,[elt_elg_GUID]            ,[elt_eti_GUID]            ,[elt_Deleted]            ,[elt_CreatedOn]            ,[elt_CreatedBy]            ,[elt_UpdatedOn]            ,[elt_UpdatedBy]            ,[elt_DeletedOn]            ,[elt_DeletedBy])
+	SELECT
+           eltguidT--(<elt_GUID, uniqueidentifier,>
+           ,elttextT--<elt_Text, varchar(200),>
+           ,null--<elt_CounterType_GUID, uniqueidentifier,>
+           ,elg_guid--(select <elt_elg_GUID, uniqueidentifier,>
+           ,eti_guid--<elt_eti_GUID, uniqueidentifier,>
+           ,0--<elt_Deleted, bit,>
+           ,getdate()--<elt_CreatedOn, datetime,>
+           ,@AdminGuid--<elt_CreatedBy, uniqueidentifier,>
+           ,null--<elt_UpdatedOn, datetime,>
+           ,null--<elt_UpdatedBy, uniqueidentifier,>
+           ,null--<elt_DeletedOn, datetime,>
+           ,null--<elt_DeletedBy, uniqueidentifier,>)
+    from @entitylink
+	join std_entitylinktypegroup
+		on elg_text = 'Compliance'
+		and elg_deleted=0
+	join std_entity
+		on eti_text = case when eldtext like '%-Individual' then 'Individual'
+						when eldtext like '%-Organization' then 'Company'
+						else 'Company' end
+		   and eti_deleted=0
+where 1=1
+and eltguidt not in (select elt_guid from std_entitylinktype)
+and eltguidt is not null
+
+INSERT INTO [dbo].[std_EntityLinkType]
+           ([elt_GUID]            ,[elt_Text]            ,[elt_CounterType_GUID]            ,[elt_elg_GUID]            ,[elt_eti_GUID]            ,[elt_Deleted]            ,[elt_CreatedOn]            ,[elt_CreatedBy]            ,[elt_UpdatedOn]            ,[elt_UpdatedBy]            ,[elt_DeletedOn]            ,[elt_DeletedBy])
+	SELECT
+           eltguidF--(<elt_GUID, uniqueidentifier,>
+           ,elttextF--<elt_Text, varchar(200),>
+           ,null--<elt_CounterType_GUID, uniqueidentifier,>
+           ,elg_guid--(select <elt_elg_GUID, uniqueidentifier,>
+           ,eti_guid--<elt_eti_GUID, uniqueidentifier,>
+           ,0--<elt_Deleted, bit,>
+           ,getdate()--<elt_CreatedOn, datetime,>
+           ,@AdminGuid--<elt_CreatedBy, uniqueidentifier,>
+           ,null--<elt_UpdatedOn, datetime,>
+           ,null--<elt_UpdatedBy, uniqueidentifier,>
+           ,null--<elt_DeletedOn, datetime,>
+           ,null--<elt_DeletedBy, uniqueidentifier,>)
+    from @entitylink
+	join std_entitylinktypegroup
+		on elg_text = 'Compliance'
+		and elg_deleted=0
+	join std_entity
+		on eti_text = 'Company'
+		   and eti_deleted=0
+where 1=1
+and eltguidF not in (select elt_guid from std_entitylinktype)
+and eltguidF is not null
+
+INSERT INTO [dbo].[std7_EntityLinkPair]
+           ([elp_GUID]            ,[elp_FromLinkType_GUID]            ,[elp_ToLinkType_GUID]            ,[elp_MaxUser]            ,[elp_eld_GUID])
+     Select
+           newid()--(<elp_GUID, uniqueidentifier,>
+           ,eltguidF--<elp_FromLinkType_GUID, uniqueidentifier,>
+           ,eltguidT--<elp_ToLinkType_GUID, uniqueidentifier,>
+           ,0--<elp_MaxUser, int,>
+           ,eld_guid--<elp_eld_GUID, uniqueidentifier,>)
+	 from @entitylink
+	 join [std7_EntityLinkDirection]
+		on eld_text = eldtext
+			and eld_Deleted=0
+	 where 1=1
+	 and eltguidt is not null
+
+
+--link compliance types
+update cc_sample..tblrecordtorecordtype
+set compliance = 1, eltguidC = lpt_guid
+from cc_sample..tblrecordtorecordtype 
+join [std_PoliticalCommittee_IndividualType]
+	on lpt_text = case recordtorecordtype when 'Recordkeeper' then 'Custodian of Records'
+										  when 'Individual Sponsor' then 'Candidate'
+				else recordtorecordtype end
+where compliance is null
+and usagetype like '%individual%'
+
+update cc_sample..tblrecordtorecordtype 
+set compliance = 1, eltguidC = pay_guid
+from cc_sample..tblrecordtorecordtype 
+join [std_PoliticalCommittee_AffiliationType]
+	on pay_text = case recordtorecordtype when 'Joint Fundraising Representative' then 'Joint Fundraising REP'
+										  when 'Joint Fundraising Committee' then 'Joint Fundraising REP'
+										  when 'Political Party Committee' then 'Affiliated Committee'
+										  when 'Connected Organization' then 'Connected/Parent Committee'
+										  when 'Sponsor' then 'Leadership PAC Sponsor'
+				  else recordtorecordtype end
+where compliance is null
+
+update cc_sample..tblrecordtorecordtype 
+set compliance = 1, eltguidC = lpy_guid
+from cc_sample..tblrecordtorecordtype 
+join [std_PoliticalCommittee_OrganizationType]
+	on lpy_text = case recordtorecordtype when 'Connected Corporation' then 'Connected/Parent Organization'
+				  else recordtorecordtype end
+where compliance is null
+
+--link compliance entitylinktypes
+update cc_sample..tblrecordtorecordtype 
+set eltguidT = elp_tolinktype_guid, eltguidF = elp_fromlinktype_guid
+from cc_sample..tblrecordtorecordtype 
+join std_entitylinktype
+	on elt_text = case recordtorecordtype when 'Recordkeeper' then 'Custodian of Records'
+										  when 'Individual Sponsor' then 'Candidate'
+				else recordtorecordtype end
+join std7_entitylinkpair
+	on elp_tolinktype_guid=elt_guid
+join std_entitylinktypegroup
+	on elt_elg_guid = elg_guid and elg_text ='Compliance' and elg_deleted=0
+where compliance = 1
+and usagetype like '%individual%'
+and eltguidT is null
+
+update cc_sample..tblrecordtorecordtype 
+set eltguidT = elp_tolinktype_guid, eltguidF = elp_fromlinktype_guid
+--select *
+from cc_sample..tblrecordtorecordtype 
+join std_entitylinktype
+	on elt_text = case recordtorecordtype when 'Joint Fundraising Representative' then 'Joint Fundraising REP'
+										  when 'Joint Fundraising Committee' then 'Joint Fundraising REP'
+										  when 'Political Party Committee' then 'Affiliated Committee'
+										  when 'Connected Organization' then 'Connected/Parent Committee'
+										  when 'Sponsor' then 'Leadership PAC Sponsor'
+				  else recordtorecordtype end
+join std_entitylinktypegroup
+	on elt_elg_guid = elg_guid and elg_text ='Compliance' and elg_deleted=0
+join std7_entitylinkpair
+	on elp_tolinktype_guid = elt_guid
+where compliance =1
+and eltguidT is null
+
+update cc_sample..tblrecordtorecordtype 
+set eltguidT = elp_tolinktype_guid, eltguidF = elp_fromlinktype_guid
+from cc_sample..tblrecordtorecordtype 
+join std_entitylinktype
+	on elt_text = case recordtorecordtype when 'Connected Corporation' then 'Connected/Parent Organization'
+				  else recordtorecordtype end
+join std_entitylinktypegroup
+	on elt_elg_guid = elg_guid and elg_text ='Compliance' and elg_deleted=0
+join std7_entitylinkpair
+	on elp_tolinktype_guid = elt_guid
+where compliance =1
+and eltguidT is null
+
+
+
+
+--create non compliance types
+update cc_sample..tblrecordtorecordtype
+set eltguidF = elp_fromlinktype_guid, eltguidT = elp_tolinktype_guid, compliance =0
+from cc_sample..tblrecordtorecordtype r2rt
+join std_entitylinktype tlink
+	on isnull(isnull(r2rt.recordtorecordtypelabel1,r2rt.recordtorecordtype),'') = tlink.elt_text and tlink.elt_Deleted=0
+join [std7_EntityLinkPair]
+	on tlink.elt_guid = elp_tolinktype_guid
+join std_entitylinktype flink
+	on flink.elt_guid = elp_fromlinktype_guid and isnull(r2rt.recordtorecordtypelabel2,'') = flink.elt_text and flink.elt_deleted=0
+join [std7_EntityLinkDirection]
+		on eld_text = case when usagetype in ('Organization-Individual'
+											  ,'Organization-Organization'
+											  ,'Individual-Individual'
+											  ,'Individual-Organization')
+										then usagetype
+										else 'Organization-Organization' end
+			and eld_Deleted=0
+where eltguidT is null and r2rt.compliance=0 and r2rt.usagetype not like '%event%'
+
+update cc_sample..tblrecordtorecordtype
+set eltguidF = newid(), eltguidT = newid(), compliance =0
+where eltguidT is null
+
+INSERT INTO [dbo].[std_EntityLinkType]
+           ([elt_GUID]            ,[elt_Text]            ,[elt_CounterType_GUID]            ,[elt_elg_GUID]            ,[elt_eti_GUID]            ,[elt_Deleted]            ,[elt_CreatedOn]            ,[elt_CreatedBy]            ,[elt_UpdatedOn]            ,[elt_UpdatedBy]            ,[elt_DeletedOn]            ,[elt_DeletedBy])
+	SELECT
+           r2rt.eltguidT--(<elt_GUID, uniqueidentifier,>
+           ,isnull(isnull(r2rt.recordtorecordtypelabel1,r2rt.recordtorecordtype),'')--<elt_Text, varchar(200),>
+           ,null--<elt_CounterType_GUID, uniqueidentifier,>
+           ,elg_guid--(select <elt_elg_GUID, uniqueidentifier,>
+           ,eti_guid--<elt_eti_GUID, uniqueidentifier,>
+           ,0--<elt_Deleted, bit,>
+           ,isnull(r2rt.creationdate,getdate())--<elt_CreatedOn, datetime,>
+           ,@AdminGuid--<elt_CreatedBy, uniqueidentifier,>
+           ,r2rt.editdate--<elt_UpdatedOn, datetime,>
+           ,usr.userguid--<elt_UpdatedBy, uniqueidentifier,>
+           ,null--<elt_DeletedOn, datetime,>
+           ,null--<elt_DeletedBy, uniqueidentifier,>)
+    from cc_sample..tblrecordtorecordtype r2rt
+	join std_entitylinktypegroup
+		on elg_text = case when r2rt.[system] = 1 then 'Internal Default Group'
+			else 'Default Group' end
+		and elg_deleted=0
+	join std_entity
+		on eti_text = case when UsageType like '%-Individual' then 'Individual'
+						when UsageType like '%-Organization' then 'Company'
+						else 'Company' end
+		   and eti_deleted=0
+	left join cc_sample..tbluser usr
+		on usr.userid = r2rt.editor
+where r2rt.compliance=0 and r2rt.usagetype not like '%event%'
+and eltguidt not in (select elt_guid from std_entitylinktype)
+and eltguidt is not null
+	  
+
+INSERT INTO [dbo].[std_EntityLinkType]
+           ([elt_GUID]            ,[elt_Text]            ,[elt_CounterType_GUID]            ,[elt_elg_GUID]            ,[elt_eti_GUID]            ,[elt_Deleted]            ,[elt_CreatedOn]            ,[elt_CreatedBy]            ,[elt_UpdatedOn]            ,[elt_UpdatedBy]            ,[elt_DeletedOn]            ,[elt_DeletedBy])
+	SELECT
+           r2rt.eltguidF--(<elt_GUID, uniqueidentifier,>
+           ,isnull(r2rt.recordtorecordtypelabel2,'')--<elt_Text, varchar(200),>
+           ,null--<elt_CounterType_GUID, uniqueidentifier,>
+           ,elg_guid--(select <elt_elg_GUID, uniqueidentifier,>
+           ,eti_guid--<elt_eti_GUID, uniqueidentifier,>
+           ,0--<elt_Deleted, bit,>
+           ,isnull(r2rt.creationdate,getdate())--<elt_CreatedOn, datetime,>
+           ,@AdminGuid--<elt_CreatedBy, uniqueidentifier,>
+           ,r2rt.editdate--<elt_UpdatedOn, datetime,>
+           ,usr.userguid--<elt_UpdatedBy, uniqueidentifier,>
+           ,null--<elt_DeletedOn, datetime,>
+           ,null--<elt_DeletedBy, uniqueidentifier,>)
+    from cc_sample..tblrecordtorecordtype r2rt
+	join std_entitylinktypegroup
+		on elg_text = case when r2rt.[system] = 1 then 'Internal Default Group'
+			else 'Default Group' end
+		and elg_deleted=0
+	join std_entity
+		on eti_text = case when UsageType like 'Individual-%' then 'Individual'
+						when UsageType like 'Organization-%' then 'Company'
+						else 'Company' end
+		   and eti_deleted=0
+	left join cc_sample..tbluser usr
+		on usr.userid = r2rt.editor
+where r2rt.compliance=0 and r2rt.usagetype not like '%event%'
+and eltguidF not in (select elt_guid from std_entitylinktype)
+and eltguidF is not null
+
+INSERT INTO [dbo].[std7_EntityLinkPair]
+           ([elp_GUID]            ,[elp_FromLinkType_GUID]            ,[elp_ToLinkType_GUID]            ,[elp_MaxUser]            ,[elp_eld_GUID])
+     Select
+           newid()--(<elp_GUID, uniqueidentifier,>
+           ,eltguidF--<elp_FromLinkType_GUID, uniqueidentifier,>
+           ,eltguidT--<elp_ToLinkType_GUID, uniqueidentifier,>
+           ,maxuses--<elp_MaxUser, int,>
+           ,eld_guid--<elp_eld_GUID, uniqueidentifier,>)
+	 from cc_sample..tblrecordtorecordtype r2rt
+	 join [std7_EntityLinkDirection]
+		on eld_text = case when usagetype in ('Organization-Individual'
+											  ,'Organization-Organization'
+											  ,'Individual-Individual'
+											  ,'Individual-Organization')
+										then usagetype
+										else 'Organization-Organization' end
+			and eld_Deleted=0
+	 where r2rt.compliance=0 and r2rt.usagetype not like '%event%'
+	 and eltguidt is not null
+
+
+--compliance affiliations record to record
+
+INSERT INTO [dbo].[std_PoliticalCommittee_Individual]
+           ([lpi_GUID]            ,[lpi_pcm_GUID]            ,[lpi_ind_GUID]            ,[lpi_lpt_GUID]            ,[lpi_Default]            ,[lpi_Deleted]            ,[lpi_CreatedOn]            ,[lpi_CreatedBy]            ,[lpi_UpdatedOn]            ,[lpi_UpdatedBy]            ,[lpi_DeletedOn]            ,[lpi_DeletedBy]            ,[lpi_DateAppointed]            ,[lpi_DateExpired])
+     SELECT
+           newid()--(<lpi_GUID, uniqueidentifier,>
+           ,org.orgguid--<lpi_pcm_GUID, uniqueidentifier,>
+           ,ind.indguid--<lpi_ind_GUID, uniqueidentifier,>
+           ,lpt_guid--<lpi_lpt_GUID, uniqueidentifier,>
+           ,0--<lpi_Default, bit,>
+           ,0--<lpi_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<lpi_CreatedOn, datetime,>
+           ,@AdminGuid--<lpi_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<lpi_UpdatedOn, datetime,>
+           ,usr.userguid--<lpi_UpdatedBy, uniqueidentifier,>
+           ,null--<lpi_DeletedOn, datetime,>
+           ,null--<lpi_DeletedBy, uniqueidentifier,>
+           ,isnull(r2r.creationdate,getdate())--<lpi_DateAppointed, datetime,>
+           ,null--<lpi_DateExpired, datetime,>)
+	 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_politicalcommittee_individualtype
+		on lpt_guid = eltguidC and compliance=1
+	 join cc_sample..tblrecords r1
+		on r2r.recid1 = r1.recid
+	 join cc_sample..tblrecords r2
+		on r2r.recid2 = r2.recid
+     join cc_sample..tblorganization org
+		on org.orgid = case when r1.type = 2 then r1.seq_id else r2.seq_id end
+	 join cc_sample..tblindividual ind
+		on ind.individ = case when r1.type = 1 then r1.seq_id else r2.seq_id end
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor
+	 where org.committee=1
+
+;with best (lpiguid, r) as
+(
+	select lpi_guid, row_number() over (partition by lpi_pcm_guid, lpi_lpt_guid
+										order by lpi_default desc, lpi_updatedon desc, lpi_createdon desc)
+	from [std_PoliticalCommittee_Individual]
+	where lpi_Deleted=0
+)
+update std_politicalcommittee_individual
+set lpi_default=1
+from std_politicalcommittee_individual
+join best
+	on lpi_guid=lpiguid and r=1
+
+--DECLARE @AdminGuid uniqueidentifier
+--select top 1 @AdminGuid = usr_guid from std_user where usr_Login = 'TechServices@aristotle.com' and usr_Deleted = 0
+
+INSERT INTO [dbo].[std_PoliticalCommitteeAffiliation]           ([paf_GUID]            ,[paf_Text]            ,[paf_pat_GUID]            ,[paf_Deleted]            ,[paf_CreatedOn]            ,[paf_CreatedBy]            ,[paf_UpdatedOn]            ,[paf_UpdatedBy]            ,[paf_DeletedOn]            ,[paf_DeletedBy]            ,[paf_Date])
+     SELECT
+           linkguid--(<paf_GUID, uniqueidentifier,>
+           ,'Affiliation'--<paf_Text, nvarchar(500),>
+           ,pat_guid--<paf_pat_GUID, uniqueidentifier,>
+           ,0--<paf_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<paf_CreatedOn, datetime,>
+           ,@AdminGuid--<paf_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<paf_UpdatedOn, datetime,>
+           ,usr.userguid--<paf_UpdatedBy, uniqueidentifier,>
+           ,null--<paf_DeletedOn, datetime,>
+           ,null--<paf_DeletedBy, uniqueidentifier,>
+           ,isnull(r2r.creationdate,getdate())--<paf_Date, datetime,>)
+	from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_politicalcommittee_affiliationtype
+		on pay_guid = eltguidC and compliance=1
+	 join cc_sample..tblrecords r1
+		on r2r.recid1 = r1.recid and r1.type=2
+	 join cc_sample..tblrecords r2
+		on r2r.recid2 = r2.recid and r2.type=2
+     join cc_sample..tblorganization fc
+		on fc.orgid = case when r1.recid in (select f.recid from cc_sample..tblfilercommittee f)
+							then r1.seq_id else r2.seq_id end
+	 join cc_sample..tblorganization org
+		on org.orgid = case when r1.recid in (select f.recid from cc_sample..tblfilercommittee f)
+							then r2.seq_id else r1.seq_id end
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor
+	 join std_politicalcommitteeaffiliationtype
+		on pat_default=1 and pat_deleted=0
+	 where fc.committee=1 and org.committee=1
+
+INSERT INTO [dbo].[std_PoliticalCommittee_Affiliation]
+           ([lpa_GUID]            ,[lpa_pcm_GUID]            ,[lpa_paf_GUID]            ,[lpa_pay_GUID]            ,[lpa_Deleted]            ,[lpa_CreatedOn]            ,[lpa_CreatedBy]            ,[lpa_UpdatedOn]            ,[lpa_UpdatedBy]            ,[lpa_DeletedOn]            ,[lpa_DeletedBy])
+     SELECT 
+           newid()--(<lpa_GUID, uniqueidentifier,>
+           ,fc.orgguid--<lpa_pcm_GUID, uniqueidentifier,>
+           ,r2r.linkguid--<lpa_paf_GUID, uniqueidentifier,>
+           ,pay_guid--<lpa_pay_GUID, uniqueidentifier,>
+           ,0--<lpa_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<lpa_CreatedOn, datetime,>
+           ,@AdminGuid--<lpa_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<lpa_UpdatedOn, datetime,>
+           ,usr.userguid--<lpa_UpdatedBy, uniqueidentifier,>
+           ,null--<lpa_DeletedOn, datetime,>
+           ,null--<lpa_DeletedBy, uniqueidentifier,>)
+	 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_politicalcommittee_affiliationtype
+		on pay_guid = eltguidC and compliance=1
+	 join cc_sample..tblrecords r1
+		on r2r.recid1 = r1.recid and r1.type=2
+	 join cc_sample..tblrecords r2
+		on r2r.recid2 = r2.recid and r2.type=2
+     join cc_sample..tblorganization fc
+		on fc.orgid = case when r1.recid in (select f.recid from cc_sample..tblfilercommittee f)
+							then r1.seq_id else r2.seq_id end
+	 join cc_sample..tblorganization org
+		on org.orgid = case when r1.recid in (select f.recid from cc_sample..tblfilercommittee f)
+							then r2.seq_id else r1.seq_id end
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor 
+	 where fc.committee=1 and org.committee=1
+
+INSERT INTO [dbo].[std_PoliticalCommittee_Affiliation]
+           ([lpa_GUID]            ,[lpa_pcm_GUID]            ,[lpa_paf_GUID]            ,[lpa_pay_GUID]            ,[lpa_Deleted]            ,[lpa_CreatedOn]            ,[lpa_CreatedBy]            ,[lpa_UpdatedOn]            ,[lpa_UpdatedBy]            ,[lpa_DeletedOn]            ,[lpa_DeletedBy])
+     SELECT 
+           newid()--(<lpa_GUID, uniqueidentifier,>
+           ,org.orgguid--<lpa_pcm_GUID, uniqueidentifier,>
+           ,r2r.linkguid--<lpa_paf_GUID, uniqueidentifier,>
+           ,pay_guid--<lpa_pay_GUID, uniqueidentifier,>
+           ,0--<lpa_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<lpa_CreatedOn, datetime,>
+           ,@AdminGuid--<lpa_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<lpa_UpdatedOn, datetime,>
+           ,usr.userguid--<lpa_UpdatedBy, uniqueidentifier,>
+           ,null--<lpa_DeletedOn, datetime,>
+           ,null--<lpa_DeletedBy, uniqueidentifier,>)
+	 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_politicalcommittee_affiliationtype
+		on pay_guid = eltguidC and compliance=1
+	 join cc_sample..tblrecords r1
+		on r2r.recid1 = r1.recid and r1.type=2
+	 join cc_sample..tblrecords r2
+		on r2r.recid2 = r2.recid and r2.type=2
+     join cc_sample..tblorganization fc
+		on fc.orgid = case when r1.recid in (select f.recid from cc_sample..tblfilercommittee f)
+							then r1.seq_id else r2.seq_id end
+	 join cc_sample..tblorganization org
+		on org.orgid = case when r1.recid in (select f.recid from cc_sample..tblfilercommittee f)
+							then r2.seq_id else r1.seq_id end
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor 
+	 where fc.committee=1 and org.committee=1
+
+INSERT INTO [dbo].[std_PoliticalCommittee_Organization]
+           ([lpo_GUID]            ,[lpo_pcm_GUID]            ,[lpo_org_GUID]            ,[lpo_lpy_GUID]            ,[lpo_Date]            ,[lpo_Default]            ,[lpo_CreatedOn]            ,[lpo_CreatedBy]            ,[lpo_UpdatedOn]            ,[lpo_UpdatedBy]            ,[lpo_DeletedOn]            ,[lpo_DeletedBy]            ,[lpo_Deleted])
+     SELECT
+           newid()--(<lpo_GUID, uniqueidentifier,>
+           ,fc.orgguid--<lpo_pcm_GUID, uniqueidentifier,>
+           ,org.orgguid--<lpo_org_GUID, uniqueidentifier,>
+           ,lpy_guid--<lpo_lpy_GUID, uniqueidentifier,>
+           ,isnull(r2r.creationdate,getdate())--<lpo_Date, datetime,>
+           ,0--<lpo_Default, bit,>
+           ,isnull(r2r.creationdate,getdate())--<lpo_CreatedOn, datetime,>
+           ,@AdminGuid--<lpo_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<lpo_UpdatedOn, datetime,>
+           ,usr.userguid--<lpo_UpdatedBy, uniqueidentifier,>
+           ,null--<lpo_DeletedOn, datetime,>
+           ,null--<lpo_DeletedBy, uniqueidentifier,>
+           ,0--<lpo_Deleted, bit,>)
+		 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_politicalcommittee_organizationtype
+		on lpy_guid = eltguidC and compliance=1
+	 join cc_sample..tblrecords r1
+		on r2r.recid1 = r1.recid and r1.type=2
+	 join cc_sample..tblrecords r2
+		on r2r.recid2 = r2.recid and r2.type=2
+     join cc_sample..tblorganization fc
+		on fc.orgid = case when r1.recid in (select f.recid from cc_sample..tblfilercommittee f)
+							then r1.seq_id else r2.seq_id end
+	 join cc_sample..tblorganization org
+		on org.orgid = case when r1.recid in (select f.recid from cc_sample..tblfilercommittee f)
+							then r2.seq_id else r1.seq_id end
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor 
+
+;with best (lpoguid, r) as
+(
+	select lpo_guid, row_number() over (partition by lpo_pcm_guid, lpo_lpy_guid
+										order by lpo_default desc, lpo_updatedon desc, lpo_createdon desc)
+	from [std_PoliticalCommittee_Organization]
+	where lpo_Deleted=0
+)
+update std_politicalcommittee_Organization
+set lpo_default=1
+from std_politicalcommittee_Organization
+join best
+	on lpo_guid=lpoguid and r=1
+
+
+----entitylink type affiliations / connections
+--flip non-uniform
+update cc_sample..tblrecordtorecord
+set recid1=recid2, recid2=recid1, flip=1
+from cc_sample..tblrecordtorecord r2r
+join cc_sample..tblrecordtorecordtype r2rt
+	on r2r.RecordToRecordTypeID=r2rt.recordtorecordtypeid
+where recid1 in (select recid from cc_sample..tblrecords where type=1)
+and usagetype = 'Individual-Organization'
+
+INSERT INTO [dbo].[std_EntityLink_Individual]
+           ([eli_GUID]            ,[eli_ind_GUID]            ,[eli_elt_GUID]            ,[eli_lnk_GUID]            ,[eli_Deleted]            ,[eli_CreatedOn]            ,[eli_CreatedBy]            ,[eli_UpdatedOn]            ,[eli_UpdatedBy]            ,[eli_DeletedOn]            ,[eli_DeletedBy]            ,[eli_isPrimary])
+	SELECT
+           newid()--(<eli_GUID, uniqueidentifier,>
+           ,indguid--<eli_ind_GUID, uniqueidentifier,>
+           ,eltguidF--<eli_elt_GUID, uniqueidentifier,>
+           ,linkguid--<eli_lnk_GUID, uniqueidentifier,>
+           ,0--<eli_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<eli_CreatedOn, datetime,>
+           ,@AdminGuid--<eli_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<eli_UpdatedOn, datetime,>
+           ,usr.userguid--<eli_UpdatedBy, uniqueidentifier,>
+           ,null--<eli_DeletedOn, datetime,>
+           ,null--<eli_DeletedBy, uniqueidentifier,>
+           ,case when pri.iseq is not null then 1 else 0 end--<eli_isPrimary, bit,>)
+	 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_entitylinktype
+		on elt_guid = eltguidF
+	 join cc_sample..tblrecords r1
+		on r2r.recid1 = r1.recid and type = 1
+	 join cc_sample..tblindividual ind
+		on ind.individ = r1.seq_id
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor
+	 left join (select r.recid orec, i.individ iseq
+				 from cc_sample..tblorganization o
+				 join cc_sample..tblindividual i
+					on seq_cntrl = individ
+				 join cc_sample..tblrecords r
+					on o.orgid = r.seq_id and type = 2) pri
+		on pri.orec = r2r.recid2 and pri.iseq = ind.individ
+
+INSERT INTO [dbo].[std_EntityLink_Individual]
+           ([eli_GUID]            ,[eli_ind_GUID]            ,[eli_elt_GUID]            ,[eli_lnk_GUID]            ,[eli_Deleted]            ,[eli_CreatedOn]            ,[eli_CreatedBy]            ,[eli_UpdatedOn]            ,[eli_UpdatedBy]            ,[eli_DeletedOn]            ,[eli_DeletedBy]            ,[eli_isPrimary])
+	SELECT
+           newid()--(<eli_GUID, uniqueidentifier,>
+           ,indguid--<eli_ind_GUID, uniqueidentifier,>
+           ,eltguidT--<eli_elt_GUID, uniqueidentifier,>
+           ,linkguid--<eli_lnk_GUID, uniqueidentifier,>
+           ,0--<eli_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<eli_CreatedOn, datetime,>
+           ,@AdminGuid--<eli_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<eli_UpdatedOn, datetime,>
+           ,usr.userguid--<eli_UpdatedBy, uniqueidentifier,>
+           ,null--<eli_DeletedOn, datetime,>
+           ,null--<eli_DeletedBy, uniqueidentifier,>
+           ,case when pri.iseq is not null then 1 else 0 end--<eli_isPrimary, bit,>)
+	 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_entitylinktype
+		on elt_guid = eltguidT
+	 join cc_sample..tblrecords r1
+		on r2r.recid2 = r1.recid and type = 1
+	 join cc_sample..tblindividual ind
+		on ind.individ = r1.seq_id
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor
+	 left join (select r.recid orec, i.individ iseq
+				 from cc_sample..tblorganization o
+				 join cc_sample..tblindividual i
+					on seq_cntrl = individ
+				 join cc_sample..tblrecords r
+					on o.orgid = r.seq_id and type = 2) pri
+		on pri.orec = r2r.recid1 and pri.iseq = ind.individ
+
+INSERT INTO [dbo].[std_EntityLink_Company]
+           ([elc_GUID]            ,[elc_cmp_GUID]            ,[elc_elt_GUID]            ,[elc_lnk_GUID]            ,[elc_Deleted]            ,[elc_CreatedOn]            ,[elc_CreatedBy]            ,[elc_UpdatedOn]            ,[elc_UpdatedBy]            ,[elc_DeletedOn]            ,[elc_DeletedBy])
+     SELECT
+           newid()--(<elc_GUID, uniqueidentifier,>
+           ,orgguid--<elc_cmp_GUID, uniqueidentifier,>
+           ,eltguidF--<elc_elt_GUID, uniqueidentifier,>
+           ,linkguid--<elc_lnk_GUID, uniqueidentifier,>
+           ,0--<elc_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<elc_CreatedOn, datetime,>
+           ,@AdminGuid--<elc_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<elc_UpdatedOn, datetime,>
+           ,usr.userguid--<elc_UpdatedBy, uniqueidentifier,>
+           ,null--<elc_DeletedOn, datetime,>
+           ,null--<elc_DeletedBy, uniqueidentifier,>)
+	 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_entitylinktype
+		on elt_guid = eltguidF
+	 join cc_sample..tblrecords r1
+		on r2r.recid1 = r1.recid and type = 2
+	 join cc_sample..tblorganization org
+		on org.orgid = r1.seq_id and committee=0
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor
+
+INSERT INTO [dbo].[std_EntityLink_Company]
+           ([elc_GUID]            ,[elc_cmp_GUID]            ,[elc_elt_GUID]            ,[elc_lnk_GUID]            ,[elc_Deleted]            ,[elc_CreatedOn]            ,[elc_CreatedBy]            ,[elc_UpdatedOn]            ,[elc_UpdatedBy]            ,[elc_DeletedOn]            ,[elc_DeletedBy])
+     SELECT
+           newid()--(<elc_GUID, uniqueidentifier,>
+           ,orgguid--<elc_cmp_GUID, uniqueidentifier,>
+           ,eltguidT--<elc_elt_GUID, uniqueidentifier,>
+           ,linkguid--<elc_lnk_GUID, uniqueidentifier,>
+           ,0--<elc_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<elc_CreatedOn, datetime,>
+           ,@AdminGuid--<elc_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<elc_UpdatedOn, datetime,>
+           ,usr.userguid--<elc_UpdatedBy, uniqueidentifier,>
+           ,null--<elc_DeletedOn, datetime,>
+           ,null--<elc_DeletedBy, uniqueidentifier,>)
+	 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_entitylinktype
+		on elt_guid = eltguidT
+	 join cc_sample..tblrecords r1
+		on r2r.recid2 = r1.recid and type = 2
+	 join cc_sample..tblorganization org
+		on org.orgid = r1.seq_id and committee=0
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor
+
+INSERT INTO [dbo].[std_EntityLink_PoliticalCommittee]
+           ([elp_GUID]            ,[elp_pcm_GUID]            ,[elp_elt_GUID]            ,[elp_lnk_GUID]            ,[elp_Deleted]            ,[elp_CreatedOn]            ,[elp_CreatedBy]            ,[elp_UpdatedOn]            ,[elp_UpdatedBy]            ,[elp_DeletedOn]            ,[elp_DeletedBy])
+      SELECT
+			newid()--(<elc_GUID, uniqueidentifier,>
+           ,orgguid--<elc_cmp_GUID, uniqueidentifier,>
+           ,eltguidF--<elc_elt_GUID, uniqueidentifier,>
+           ,linkguid--<elc_lnk_GUID, uniqueidentifier,>
+           ,0--<elc_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<elc_CreatedOn, datetime,>
+           ,@AdminGuid--<elc_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<elc_UpdatedOn, datetime,>
+           ,usr.userguid--<elc_UpdatedBy, uniqueidentifier,>
+           ,null--<elc_DeletedOn, datetime,>
+           ,null--<elc_DeletedBy, uniqueidentifier,>)
+	 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_entitylinktype
+		on elt_guid = eltguidF
+	 join cc_sample..tblrecords r1
+		on r2r.recid1 = r1.recid and type = 2
+	 join cc_sample..tblorganization org
+		on org.orgid = r1.seq_id and committee=1
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor
+
+INSERT INTO [dbo].[std_EntityLink_PoliticalCommittee]
+           ([elp_GUID]            ,[elp_pcm_GUID]            ,[elp_elt_GUID]            ,[elp_lnk_GUID]            ,[elp_Deleted]            ,[elp_CreatedOn]            ,[elp_CreatedBy]            ,[elp_UpdatedOn]            ,[elp_UpdatedBy]            ,[elp_DeletedOn]            ,[elp_DeletedBy])
+      SELECT
+			newid()--(<elc_GUID, uniqueidentifier,>
+           ,orgguid--<elc_cmp_GUID, uniqueidentifier,>
+           ,eltguidT--<elc_elt_GUID, uniqueidentifier,>
+           ,linkguid--<elc_lnk_GUID, uniqueidentifier,>
+           ,0--<elc_Deleted, bit,>
+           ,isnull(r2r.creationdate,getdate())--<elc_CreatedOn, datetime,>
+           ,@AdminGuid--<elc_CreatedBy, uniqueidentifier,>
+           ,r2r.editdate--<elc_UpdatedOn, datetime,>
+           ,usr.userguid--<elc_UpdatedBy, uniqueidentifier,>
+           ,null--<elc_DeletedOn, datetime,>
+           ,null--<elc_DeletedBy, uniqueidentifier,>)
+	 from cc_sample..tblrecordtorecord r2r
+	 join cc_sample..tblrecordtorecordtype r2rt
+		on r2r.recordtorecordtypeid = r2rt.recordtorecordtypeid
+	 join std_entitylinktype
+		on elt_guid = eltguidT
+	 join cc_sample..tblrecords r1
+		on r2r.recid2 = r1.recid and type = 2
+	 join cc_sample..tblorganization org
+		on org.orgid = r1.seq_id and committee=1
+	 left join cc_sample..tbluser usr
+		on usr.userid = r2r.editor
+
+
+--********************************************************************************
+--Convert data from BO..tblAccount and BO..tblBankAccount to P7..std_Account
+--********************************************************************************
