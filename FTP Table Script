@@ -1,0 +1,848 @@
+/****** Script for SelectTopNRows command from SSMS  ******/
+use p6_Randpaulforpresident_20150331
+go   
+
+select * from i_stripe_001
+
+select * from i_winright_001
+
+--Insert every batch of files into another table
+ 
+SELECT * into i_RandPaulLoad001
+FROM [p6_RandPaulforPresident_20150331].[dbo].i_stripe_001
+
+--add guid for all
+alter table i_stripe_001 add indguid uniqueidentifier,pcmguid uniqueidentifier,cmpguid uniqueidentifier, sourceid varchar(20)
+
+--Every import needs new ids
+
+update i_stripe_001 set indguid = newid() 
+
+----ind
+alter table i_stripe_001 add ptyguid uniqueidentifier,ethguid uniqueidentifier,racguid uniqueidentifier,
+occguid uniqueidentifier,og1guid uniqueidentifier,og2guid uniqueidentifier,og3guid uniqueidentifier,intguid uniqueidentifier
+
+update i_stripe_001 set ptyguid = '006F2A6D-F407-4772-B062-2258FF3DE9CE'
+
+--add ethnicity guid
+
+update i_stripe_001 set ethguid='CD06E95F-1FE5-4538-BBDA-BA38C340E681'
+
+--add race guid
+update i_stripe_001 set racguid='122B4CA6-CDA5-4D82-8F93-EED90EB6889E'
+
+--occupation 
+select distinct occupation into #tempa from i_stripe_001 where occupation is not null and occupation <> ''
+
+insert into std_occupation
+select
+newid(),occupation,0,0,getdate(),'00000000-0000-0000-0000-000000000000',NULL,NULL,NULL,NULL
+from #tempa
+
+update i_stripe_001 set occguid = occ_guid from std_occupation
+where occ_text = case when occupation is NULL then ''
+else occupation
+end
+
+select * from i_stripe_001 where occguid is null
+
+update i_stripe_001 set occguid='7D81B120-16D2-43FF-A14B-18FF842BD530' where occguid is null
+
+drop table #tempa
+
+--employer
+drop table #emp
+
+alter table i_stripe_001 add cloguid uniqueidentifier ,ictguid uniqueidentifier,
+cmtguid uniqueidentifier, cltguid uniqueidentifier, iduguid uniqueidentifier
+
+select distinct employer, cmpguid, cloguid, ictguid, cmtguid, cltguid,iduguid into #emp
+from i_stripe_001
+where employer <> '' and employer is not null   
+
+update #emp set cmpguid = newid()
+update #emp set cloguid = newid()
+
+update #emp set cmtguid = cmt_guid from std_companytype 
+where cmt_text = 'employer' and cmt_deleted = 0
+
+update #emp set cltguid = clt_guid from std_companylocationtype
+where clt_deleted = 0 and clt_text = 'Head Quarters' 
+
+update #emp set ictguid = ict_guid from std_individual_companylocationtype
+where ict_deleted = 0 and ict_text = 'Employee'
+
+update #emp set ictguid='A6170B15-2B98-4F56-97E3-2F7992C8A6EB' where ictguid is null
+
+select * from std_individual_companylocationtype
+
+update #emp set iduguid = idu_guid from std_industry
+where idu_deleted = 0 and idu_text = ''
+
+select * from #emp
+
+INSERT INTO [std_Company]
+           ([cmp_GUID]
+           ,[cmp_Name]
+           ,[cmp_cmt_GUID]
+           ,[cmp_Deleted]
+           ,[cmp_CreatedOn]
+           ,[cmp_CreatedBy]
+           --,[cmp_UpdatedOn]
+           --,[cmp_UpdatedBy]
+           --,[cmp_DeletedOn]
+           --,[cmp_DeletedBy]
+           ,[cmp_Inactive]
+           ,[cmp_idu_GUID])
+     select
+          cmpguid,-- (<cmp_GUID, uniqueidentifier,>
+          employer,-- ,<cmp_Name, nvarchar(250),>
+          cmtguid,-- ,<cmp_cmt_GUID, uniqueidentifier,>
+          0,-- ,<cmp_Deleted, bit,>
+          getdate(),-- ,<cmp_CreatedOn, datetime,>
+         '00000000-0000-0000-0000-000000000000',--  ,<cmp_CreatedBy, uniqueidentifier,>
+           --,<cmp_UpdatedOn, datetime,>
+           --,<cmp_UpdatedBy, uniqueidentifier,>
+           --,<cmp_DeletedOn, datetime,>
+           --,<cmp_DeletedBy, uniqueidentifier,>
+          0,-- ,<cmp_Inactive, bit,>
+          iduguid-- ,<cmp_idu_GUID, uniqueidentifier,>)
+      from #emp
+GO
+
+INSERT INTO [std_CompanyLocation]
+           ([clo_GUID]
+           ,[clo_cmp_GUID]
+           ,[clo_clt_GUID]
+           ,[clo_Name]
+           ,[clo_Address1]
+           ,[clo_Address2]
+           ,[clo_Address3]
+           ,[clo_City]
+           ,[clo_State]
+           ,[clo_Zip5]
+           ,[clo_Zip4]
+           ,[clo_Postal]
+           ,[clo_Crrt]
+           ,[clo_DPT]
+           ,[clo_Tract]
+           ,[clo_Block]
+           --,[clo_Lat]
+           --,[clo_Long]
+           ,[clo_Phone]
+           ,[clo_Fax]
+           ,[clo_EMail]
+           ,[clo_CountyFips]
+           ,[clo_County]
+           ,[clo_Congress]
+           ,[clo_Senate]
+           ,[clo_Legislature]
+           --,[clo_PrecinctCode]
+           --,[clo_PrecinctName]
+           ,[clo_Headquarter]
+           ,[clo_Deleted]
+           ,[clo_CreatedOn]
+           ,[clo_CreatedBy]
+           --,[clo_UpdatedOn]
+           --,[clo_UpdatedBy]
+           --,[clo_DeletedOn]
+           --,[clo_DeletedBy]
+           ,[clo_SourceId]
+           --,[clo_HouseNumber]
+           --,[clo_HouseNumberSuffix]
+           --,[clo_Street]
+           --,[clo_RuralRoute]
+           --,[clo_POBOX]
+           --,[clo_Line1_std]
+           --,[clo_Line2_std]
+           --,[clo_Line3_std]
+           --,[clo_Ward]
+           --,[clo_EvenOdd]
+           --,[clo_PreDirection]
+           --,[clo_StreetSuffix]
+           --,[clo_PostDirection]
+           )
+     select
+           cloguid,--(<clo_GUID, uniqueidentifier,>
+           cmpguid,--,<clo_cmp_GUID, uniqueidentifier,>
+           cltguid,--,<clo_clt_GUID, uniqueidentifier,>
+          employer,-- ,<clo_Name, nvarchar(100),>
+          '', --,<clo_Address1, nvarchar(50),>
+          '', --,<clo_Address2, nvarchar(50),>
+           '',--,<clo_Address3, nvarchar(50),>
+           '',--,<clo_City, nvarchar(30),>
+           '',--,<clo_State, nvarchar(2),>
+           '',--,<clo_Zip5, nvarchar(10),>
+           '',--,<clo_Zip4, nchar(4),>
+           '',--,<clo_Postal, nvarchar(10),>
+           '',--,<clo_Crrt, nchar(4),>
+           '',--,<clo_DPT, nchar(3),>
+           '',--,<clo_Tract, nchar(6),>
+           '',--,<clo_Block, nchar(4),>
+           --,<clo_Lat, float,>
+           --,<clo_Long, float,>
+          '', --,<clo_Phone, nvarchar(20),>
+          '', --,<clo_Fax, nvarchar(20),>
+          '', --,<clo_EMail, nvarchar(100),>
+          '', --,<clo_CountyFips, nchar(3),>
+          '', --,<clo_County, nvarchar(50),>
+          '', --,<clo_Congress, nchar(2),>
+          '', --,<clo_Senate, nchar(2),>
+          '', --,<clo_Legislature, nchar(3),>
+           --,<clo_PrecinctCode, nvarchar(10),>
+           --,<clo_PrecinctName, nvarchar(50),>
+          0,-- ,<clo_Headquarter, bit,>
+           0,--,<clo_Deleted, bit,>
+           getdate(),--,<clo_CreatedOn, datetime,>
+          '00000000-0000-0000-0000-000000000000',-- ,<clo_CreatedBy, uniqueidentifier,>
+           --,<clo_UpdatedOn, datetime,>
+           --,<clo_UpdatedBy, uniqueidentifier,>
+           --,<clo_DeletedOn, datetime,>
+           --,<clo_DeletedBy, uniqueidentifier,>
+           ''--,<clo_SourceId, nvarchar(50),>
+           --,<clo_HouseNumber, nvarchar(10),>
+           --,<clo_HouseNumberSuffix, nvarchar(10),>
+           --,<clo_Street, nvarchar(30),>
+           --,<clo_RuralRoute, nvarchar(30),>
+           --,<clo_POBOX, nvarchar(10),>
+           --,<clo_Line1_std, nvarchar(50),>
+           --,<clo_Line2_std, nvarchar(50),>
+           --,<clo_Line3_std, nvarchar(50),>
+           --,<clo_Ward, nvarchar(10),>
+           --,<clo_EvenOdd, nchar(1),>
+           --,<clo_PreDirection, nchar(4),>
+           --,<clo_StreetSuffix, nchar(8),>
+           --,<clo_PostDirection, nchar(4),>)
+      from #emp
+GO
+---insert into individualcompanylocationtable
+update i_stripe_001 set i_stripe_001.ictguid = #emp.ictguid
+from #emp
+where i_stripe_001.employer = #emp.employer
+
+update i_stripe_001 set i_stripe_001.cloguid = #emp.cloguid
+from #emp
+where i_stripe_001.employer = #emp.employer
+
+update i_stripe_001 set cloguid ='32853107-D93D-463D-9BF5-0177970E64F6' where cloguid is null
+
+select * from std_companylocation
+
+select * from i_stripe_001 where ictguid is null
+
+update i_stripe_001 set ictguid='A708D8B6-C233-43C1-96D0-287DD9E3B573' where ictguid is null
+
+EXEC sp_msforeachtable "ALTER TABLE ? NOCHECK CONSTRAINT all"
+
+INSERT INTO [std_Individual_CompanyLocation]
+           ([lio_GUID]
+           ,[lio_ind_GUID]
+           ,[lio_clo_GUID]
+           ,[lio_ict_GUID]
+           ,[lio_Default]
+           ,[lio_Deleted]
+           ,[lio_CreatedOn]
+           ,[lio_CreatedBy]
+           --,[lio_UpdatedOn]
+           --,[lio_UpdatedBy]
+           --,[lio_DeletedOn]
+           --,[lio_DeletedBy]
+           ,[lio_IsPrimaryContact]
+           --,[lio_lict_GUID]
+           --,[lio_licr_GUID]
+           )
+     select
+           newid(),--  (<lio_GUID, uniqueidentifier,>
+           indguid,--,<lio_ind_GUID, uniqueidentifier,>
+           cloguid,--,<lio_clo_GUID, uniqueidentifier,>
+           ictguid,--,<lio_ict_GUID, uniqueidentifier,>
+           1,--,<lio_Default, bit,>
+           0,--,<lio_Deleted, bit,>
+           getdate(),--,<lio_CreatedOn, datetime,>
+           '00000000-0000-0000-0000-000000000000',--,<lio_CreatedBy, uniqueidentifier,>
+           --,<lio_UpdatedOn, datetime,>
+           --,<lio_UpdatedBy, uniqueidentifier,>
+           --,<lio_DeletedOn, datetime,>
+           --,<lio_DeletedBy, uniqueidentifier,>
+           0--<lio_IsPrimaryContact, bit,>
+           --,<lio_lict_GUID, uniqueidentifier,>
+           --,<lio_licr_GUID, uniqueidentifier,>)
+         from i_stripe_001 
+		 where cloguid is not null
+GO
+
+---add in individualorggroup guids
+update i_stripe_001 set og1guid = og1_guid from std_individualorggroup1
+where og1_text = '' and og1_deleted = 0
+update i_stripe_001 set og2guid = og2_guid from std_individualorggroup2
+where og2_text = '' and og2_deleted = 0
+update i_stripe_001 set og3guid = og3_guid from std_individualorggroup3
+where og3_text = '' and og3_deleted = 0
+
+
+---add intguid
+update i_stripe_001 set intguid='063C4309-98B8-4F42-A4F9-7506AFA59DF4'
+
+select * from std_individual order by ind_createdon desc
+
+select * from i_stripe_001 where [last name] ='banning'
+
+---Main import into std_individual
+INSERT INTO [std_Individual]
+           ([ind_GUID]
+           ,[ind_Prefix]
+           ,[ind_FirstName]
+           ,[ind_MiddleName]
+           ,[ind_LastName]
+           ,[ind_Suffix]
+           ,[ind_ProfSuffix]
+           ,[ind_Title]
+           ,[ind_MailName]
+           ,[ind_Salutation1]
+           ,[ind_Salutation2]
+           ,[ind_pty_GUID]
+           ,[ind_eth_GUID]
+           ,[ind_rac_GUID]
+           --,[ind_clo_GUID]
+           ,[ind_occ_GUID]
+           ,[ind_og1_GUID]
+           ,[ind_og2_GUID]
+           ,[ind_og3_GUID]
+           ,[ind_Birthdate]
+           ,[ind_Register]
+           ,[ind_Gender]
+           ,[ind_Marital]
+           ,[ind_VoterId]
+           ,[ind_SourceID]
+           ,[ind_HashedID]
+           ,[ind_Deleted]
+           ,[ind_CreatedOn]
+           ,[ind_CreatedBy]
+           --,[ind_UpdatedOn]
+           --,[ind_UpdatedBy]
+           --,[ind_DeletedOn]
+           --,[ind_DeletedBy]
+           ,[ind_int_GUID]
+           ,[ind_API_Id]
+           ,[ind_Password]
+           --,[ind_tracking_GUID]
+           ,[ind_Inactive]
+           --,[ind_GRPassword]
+           )
+     select 
+          indguid, --,<ind_GUID, uniqueidentifier,>
+         '',--  ,<ind_Prefix, nvarchar(10),> --(i thought this field was [indiv. title] but it was not in this database
+         isnull([first name],''),  --,<ind_FirstName, nvarchar(30),>
+         isnull([middle name],''),  --,<ind_MiddleName, nvarchar(30),>
+         isnull([last name],''),  --,<ind_LastName, nvarchar(30),>
+         '',  --,<ind_Suffix, nvarchar(10),>
+       '',    --,<ind_ProfSuffix, nvarchar(10),>
+       '',    --,<ind_Title, nvarchar(100),>
+       '',    --,<ind_MailName, nvarchar(50),>
+        salutation,   --,<ind_Salutation1, nvarchar(50),>
+        '',   --,<ind_Salutation2, nvarchar(50),>
+       ptyguid,    --,<ind_pty_GUID, uniqueidentifier,>
+       ethguid,    --,<ind_eth_GUID, uniqueidentifier,>
+       racguid,    --,<ind_rac_GUID, uniqueidentifier,>
+           --,<ind_clo_GUID, uniqueidentifier,>
+       occguid,  --  ,<ind_occ_GUID, uniqueidentifier,>
+       og1guid,    --,<ind_og1_GUID, uniqueidentifier,>
+       og2guid,    --,<ind_og2_GUID, uniqueidentifier,>
+       og3guid,    --,<ind_og3_GUID, uniqueidentifier,>
+       null, --   <ind_Birthdate, datetime,>
+        null, -- <ind_Register, datetime,>
+         '',  --,<ind_Gender, nchar(1),>
+         'Z',  --,<ind_Marital, nchar(1),>
+        '',   --,<ind_VoterId, nvarchar(20),>
+        '',   --,<ind_SourceID, nvarchar(50),>
+        '',   --,<ind_HashedID, nvarchar(50),>
+        0,   --,<ind_Deleted, bit,>
+        getdate(),  --,<ind_CreatedOn, datetime,>
+        '00000000-0000-0000-0000-000000000000',   --,<ind_CreatedBy, uniqueidentifier,>
+           --,<ind_UpdatedOn, datetime,>
+           --,<ind_UpdatedBy, uniqueidentifier,>
+           --,<ind_DeletedOn, datetime,>
+           --,<ind_DeletedBy, uniqueidentifier,>
+         intguid,  --,<ind_int_GUID, uniqueidentifier,>
+         '',  --,<ind_API_Id, nvarchar(10),>
+         '',  --,<ind_Password, nvarchar(40),>
+          -- ,<ind_tracking_GUID, uniqueidentifier,>
+           0 --,<ind_Inactive, bit,>
+          -- ,<ind_GRPassword, nvarchar(40),>)
+ from i_stripe_001 
+where [Last Name] + [first name] + [Address 1] 
+ not in(Select ind_lastname + ind_FirstName + iad_line1 from std_individual, std_IndividualAddress
+ where iad_ind_GUID=ind_guid)
+
+
+--home address
+alter table i_stripe_001 add hiadguid uniqueidentifier, hiatguid uniqueidentifier, cryguid uniqueidentifier
+
+--set cryguid  
+update i_stripe_001 set cryguid = cry_guid from std_country 
+where cry_deleted = 0 and cry_text = 'US' 
+
+---insert home address
+update i_stripe_001 set hiadguid = newid()
+update i_stripe_001 set hiatguid = iat_guid from std_individualaddresstype
+where iat_deleted = 0 and iat_text = 'Home'
+
+select * from i_stripe_001
+
+INSERT INTO [std_IndividualAddress]
+           ([iad_GUID]
+           ,[iad_ind_GUID]
+           ,[iad_iat_GUID]
+           ,[iad_Default]
+           ,[iad_NotContact]
+           ,[iad_EvenOdd]
+           ,[iad_HouseNumber]
+           ,[iad_HouseNumberSuffix]
+           ,[iad_PreDirection]
+           ,[iad_Street]
+           ,[iad_StreetSuffix]
+           ,[iad_PostDirection]
+           ,[iad_RuralRoute]
+           ,[iad_POBOX]
+           ,[iad_Line1]
+           ,[iad_Line2]
+           ,[iad_Line3]
+           ,[iad_City]
+           ,[iad_State]
+           ,[iad_cry_GUID]
+           ,[iad_Zip5]
+           ,[iad_Zip4]
+           ,[iad_Postal]
+           ,[iad_Crrt]
+           ,[iad_DPT]
+           ,[iad_Tract]
+           ,[iad_Block]
+           ,[iad_CountyFips]
+           ,[iad_County]
+           ,[iad_Congress]
+           ,[iad_Senate]
+           ,[iad_Legislature]
+           --,[iad_Lat]
+           --,[iad_Long]
+           ,[iad_Deleted]
+           ,[iad_CreatedOn]
+           ,[iad_CreatedBy]
+           --,[iad_UpdatedOn]
+           --,[iad_UpdatedBy]
+           --,[iad_DeletedOn]
+           --,[iad_DeletedBy]
+           ,[iad_Line1_std]
+           ,[iad_Line2_std]
+           ,[iad_Line3_std]
+           ,[iad_PrecinctCode]
+           ,[iad_PrecinctName]
+           ,[iad_Ward])
+     select
+           hiadguid,--(<iad_GUID, uniqueidentifier,>
+           indguid,--,<iad_ind_GUID, uniqueidentifier,>
+           hiatguid,--,<iad_iat_GUID, uniqueidentifier,>
+           1,--,<iad_Default, bit,>
+           0,--,<iad_NotContact, bit,>
+          '', --,<iad_EvenOdd, nchar(1),>
+          '', --,<iad_HouseNumber, nvarchar(10),>
+          '', --,<iad_HouseNumberSuffix, nvarchar(10),>
+          '', --,<iad_PreDirection, nchar(2),>
+          '', --,<iad_Street, nvarchar(30),>
+          '', --,<iad_StreetSuffix, nchar(4),>
+          '', --,<iad_PostDirection, nchar(2),>
+          '', --,<iad_RuralRoute, nvarchar(30),>
+          '', --,<iad_POBOX, nvarchar(10),>
+           isnull([address 1],''),--,<iad_Line1, nvarchar(50),>
+           isnull([address 2],''),--,<iad_Line2, nvarchar(50),>
+           '',--,<iad_Line3, nvarchar(50),>
+           isnull([city],''),--,<iad_City, nvarchar(30),>
+           isnull([state],''),--,<iad_State, nvarchar(2),>
+           cryguid,--,<iad_cry_GUID, uniqueidentifier,>
+           isnull([zip],''),--,<iad_Zip5, nvarchar(10),>
+           '',--,<iad_Zip4, nvarchar(4),>
+           isnull([zip],''),--,<iad_Postal, nvarchar(10),>
+          '', --,<iad_Crrt, nvarchar(4),>
+          '', --,<iad_DPT, nvarchar(3),>
+           '',--,<iad_Tract, nvarchar(6),>
+           '',--,<iad_Block, nvarchar(4),>
+           '',--,<iad_CountyFips, nchar(3),>
+           '',--,<iad_County, nvarchar(50),>
+          '',--,<iad_Congress, nchar(2),>
+           '',--,<iad_Senate, nchar(2),>
+           '',--,<iad_Legislature, nchar(3),>
+           --,<iad_Lat, float,>
+           --,<iad_Long, float,>
+           0,--,<iad_Deleted, bit,>
+           getdate(),--,<iad_CreatedOn, datetime,>
+           '00000000-0000-0000-0000-000000000000',--,<iad_CreatedBy, uniqueidentifier,>
+           --,<iad_UpdatedOn, datetime,>
+           --,<iad_UpdatedBy, uniqueidentifier,>
+           --,<iad_DeletedOn, datetime,>
+           --,<iad_DeletedBy, uniqueidentifier,>
+           '',--,<iad_Line1_std, nvarchar(50),>
+           '',--,<iad_Line2_std, nvarchar(50),>
+           '',--,<iad_Line3_std, nvarchar(50),>
+           '',--,<iad_PrecinctCode, nvarchar(10),>
+           '',--,<iad_PrecinctName, nvarchar(50),>
+           ''--,<iad_Ward, nvarchar(10),>)
+from i_stripe_001 
+GO
+
+---inserts into std_individualemail
+alter table i_stripe_001 add emsguid uniqueidentifier, pemaguid uniqueidentifier,pemtguid uniqueidentifier
+
+update i_stripe_001 set emsguid = ems_guid from std_individualemailstatus
+where ems_deleted = 0 and ems_text = 'active'
+
+--personal email
+update i_stripe_001 set pemaguid = newid()
+update i_stripe_001 set pemtguid = emt_guid from std_individualemailtype
+where emt_deleted = 0 and emt_text = 'Personal Email'
+
+INSERT INTO [std_IndividualeMail]
+           ([ema_GUID]
+           ,[ema_ind_GUID]
+           ,[ema_Email]
+           ,[ema_emt_GUID]
+           ,[ema_ems_GUID]
+           ,[ema_Default]
+           ,[ema_NotContact]
+           ,[ema_Deleted]
+           ,[ema_CreatedOn]
+           ,[ema_CreatedBy]
+           --,[ema_UpdatedOn]
+           --,[ema_UpdatedBy]
+           --,[ema_DeletedOn]
+           --,[ema_DeletedBy]
+           ,[ema_TextOnly])
+     select
+           pemaguid,--(<ema_GUID, uniqueidentifier,>
+           indguid,--,<ema_ind_GUID, uniqueidentifier,>
+           isnull(email,''),--,<ema_Email, nvarchar(250),>
+           pemtguid,--<ema_emt_GUID, uniqueidentifier,>
+           emsguid,--,<ema_ems_GUID, uniqueidentifier,>
+           0,--,<ema_Default, bit,>
+           0,--,<ema_NotContact, bit,>
+           0,--,<ema_Deleted, bit,>
+           getdate(),--,<ema_CreatedOn, datetime,>
+           '00000000-0000-0000-0000-000000000000',--,<ema_CreatedBy, uniqueidentifier,>
+           --,<ema_UpdatedOn, datetime,>
+           --,<ema_UpdatedBy, uniqueidentifier,>
+           --,<ema_DeletedOn, datetime,>
+           --,<ema_DeletedBy, uniqueidentifier,>
+           0--,<ema_TextOnly, bit,>)
+      from i_stripe_001 
+GO
+
+--Home Phone
+alter table i_stripe_001 add hphoguid uniqueidentifier,hphtguid uniqueidentifier
+GO
+
+update i_stripe_001 set hphoguid = newid()
+update i_stripe_001 set hphtguid = pht_guid from std_phonetype
+where pht_deleted = 0 and pht_text = 'Home Phone'
+
+select * from i_stripe_001
+
+INSERT INTO [std_Phone]
+           ([pho_GUID]
+           ,[pho_ind_GUID]
+           ,[pho_Number]
+           ,[pho_Extension]
+           ,[pho_pht_GUID]
+           ,[pho_NotContact]
+           ,[pho_Deleted]
+           ,[pho_CreatedOn]
+           ,[pho_CreatedBy]
+           --,[pho_UpdatedOn]
+           --,[pho_UpdatedBy]
+           --,[pho_DeletedOn]
+           --,[pho_DeletedBy]
+           ,[pho_Default]
+           --,[pho_phc_GUID]
+           )
+     select
+           hphoguid,--(<pho_GUID, uniqueidentifier,>
+           indguid,--,<pho_ind_GUID, uniqueidentifier,>
+           [phone],--,<pho_Number, nvarchar(20),>
+           '',--,<pho_Extension, nvarchar(5),>
+           hphtguid,--,<pho_pht_GUID, uniqueidentifier,>
+           0,--,<pho_NotContact, bit,>
+           0,--,<pho_Deleted, bit,>
+           getdate(),--,<pho_CreatedOn, datetime,>
+           '00000000-0000-0000-0000-000000000000',--,<pho_CreatedBy, uniqueidentifier,>
+           --,<pho_UpdatedOn, datetime,>
+           --,<pho_UpdatedBy, uniqueidentifier,>
+           --,<pho_DeletedOn, datetime,>
+           --,<pho_DeletedBy, uniqueidentifier,>
+           0--,<pho_Default, bit,>
+           --,<pho_phc_GUID, uniqueidentifier,>)
+     from i_stripe_001 
+
+---------Check for Political Committee----------
+
+--Setup Receipts
+alter table i_stripe_001 add perguid uniqueidentifier, rcsguid uniqueidentifier, souguid uniqueidentifier,
+chsguid uniqueidentifier, accguid uniqueidentifier, batguid uniqueidentifier, actguid uniqueidentifier,
+rtype varchar(40), rsubtype varchar(40), rcpguid uniqueidentifier,rctguid uniqueidentifier,linkguid uniqueidentifier
+
+--add rcpguid
+update i_stripe_001 set rcpguid = newid()
+
+--perguid  this will need to be reviewed for each conversion
+alter table i_stripe_001 add pyear varchar(4),ptext varchar(20)
+
+update i_stripe_001 set ptext ='Primary'
+update i_stripe_001 set pyear='2016'
+
+update i_stripe_001 set perguid ='0299E596-5924-4073-BFE8-0F6600DD69C0'
+
+--accguid
+
+update i_stripe_001 set actguid='59924EF7-E11A-438F-A77F-42616B71A53D'
+
+update i_stripe_001 set accguid='475AF4C9-F10F-42E5-88BB-D4A5B63D320F'
+
+select * from std_account
+
+--souguid
+select * from i_stripe_001
+
+select distinct [source] from i_stripe_001 
+
+select distinct [source] into #source from i_stripe_001
+
+insert into std_source
+select
+newid(),[source],0, getdate(),'00000000-0000-0000-0000-000000000000',
+NULL,NULL,NULL,NULL,0
+from #source
+
+update i_stripe_001 set souguid = sou_guid from std_source
+where sou_text = [source]
+
+drop table #source
+
+
+update i_stripe_001 set souguid = 'B458B6C9-22F0-4A16-835D-6DE2A9B7D474' where souguid is null
+
+--chsguid 
+
+update i_stripe_001 set chsguid='3C3FCA07-FD26-4DBE-87A8-B2BA88A9DE3E'
+
+--batguid Create new batch
+SELECT * FROM [p6_RandPaulforPresident_20150331].[dbo].[i_stripe_001] 
+
+set identity_insert std_batch on 
+
+INSERT INTO [dbo].[std_Batch]
+           ([bat_GUID]
+		    ,[bat_Id]
+           ,[bat_Name]
+           ,[bat_Date]
+           ,[bat_Cont_Amount]
+           ,[bat_Disb_Amount]
+           ,[bat_Close_Date]
+           ,[bat_Default]
+           ,[bat_Deleted]
+           ,[bat_CreatedOn]
+           ,[bat_CreatedBy]
+           ,[bat_UpdatedOn]
+           ,[bat_UpdatedBy]
+           ,[bat_DeletedOn]
+           ,[bat_DeletedBy]
+           ,[bat_Deposit_Post_Date]
+           ,[bat_HasFinancialTransactions])
+values (newid(), 28, '20150522-Stripe', getdate(), 0,0,'2015-05-30', 0, 0, getdate(), '00000000-0000-0000-0000-000000000000', null, null, null, null, null, null)
+
+select * from std_batch 
+
+update i_stripe_001 set batguid='B1EFE8C6-F71A-4827-877B-3EDA7D2B2C5A'
+
+
+--Rtype - Rsubtype
+
+SELECT * FROM [p6_RandPaulforPresident_20150331].[dbo].[i_stripe_001] 
+
+select distinct [transaction type] from i_stripe_001
+
+--select * from std_ReceiptsubType where rcs_rct_GUID='25184D9B-5010-4A32-AA93-C07A6D3CD6FF'
+
+update i_stripe_001 set rtype='Contribution' where [transaction type] = 'charge'
+update i_stripe_001 set rsubtype='Credit Card' where [transaction type] = 'charge'
+
+update  i_stripe_001 set rtype='Correction' where [transaction type] = 'Adjustment'
+update i_stripe_001 set rsubtype='Receipt' where [transaction type] = 'Adjustment' 
+
+update i_stripe_001 set rtype='Transfer' where [transaction type] = 'transfer'
+update i_stripe_001 set rsubtype='From Affiliated' where [transaction type] = 'transfer'
+
+update i_stripe_001 set rtype='Offset of Operating Expenditure' where [transaction type] = 'refund'
+update i_stripe_001 set rsubtype='Refund' where [transaction type] = 'refund'
+--rcsguid
+
+update i_stripe_001 set rcsguid='15BD477A-0AF5-43A5-BF7C-426F86661616' where [transaction type] = 'charge'--Contribution/credit card/cash/check
+
+update i_stripe_001 set rcsguid='D05C5413-2D7A-4DAA-A6FA-BCDA5B7C8CC1' where [transaction type] = 'transfer'
+
+update i_stripe_001 set rcsguid ='5005814F-C1F1-4B06-9ECA-A165CC576B26' where [transaction type] = 'Adjustment'
+
+update i_stripe_001 set rcsguid ='31E6AC21-C39E-4B92-8896-649D81F189F8' where [transaction type] = 'Refund'
+
+--update i_stripe_001
+--set rcsguid = rcs_guid from std_receiptsubtype
+--where rctguid = rcs_rct_guid and rsubtype = rcs_text and rcs_deleted = 0 
+
+select * from i_stripe_001 where accguid is null
+--receipt insert
+set ansi_warnings off
+
+INSERT INTO [std_Receipt]
+           ([rcp_GUID]
+           ,[rcp_Date]
+           ,[rcp_Check_No]
+           ,[rcp_Amount]
+           --,[rcp_InterestRate]
+           ,[rcp_Purpose]
+           ,[rcp_Deposited]
+           ,[rcp_Statement]
+           ,[rcp_Note]
+           ,[rcp_State]
+           ,[rcp_Reconciled]
+           ,[rcp_ForceItemize]
+           ,[rcp_ForceUnitemize]
+           ,[rcp_per_GUID]
+           ,[rcp_rcs_GUID]
+           ,[rcp_sou_GUID]
+           ,[rcp_chs_GUID]
+           ,[rcp_acc_GUID]
+           ,[rcp_bat_GUID]
+           ,[rcp_FecId]
+           ,[rcp_TransId]
+           --,[rcp_rlv_GUID]
+           --,[rcp_let_GUID_ThankYou]
+           --,[rcp_let_GUID_Compliance]
+           --,[rcp_ple_GUID]
+           --,[rcp_link_GUID]
+           ,[rcp_Deleted]
+           ,[rcp_CreatedOn]
+           ,[rcp_CreatedBy]
+           --,[rcp_UpdatedOn]
+           --,[rcp_UpdatedBy]
+           --,[rcp_DeletedOn]
+           --,[rcp_DeletedBy]
+           ,[rcp_Support]
+           ,[rcp_Oppose]
+           ,[rcp_SourceId]
+           --,[rcp_DueDate]
+           --,[rcp_MatchingFundsSequence]
+           --,[rcp_receivedDate]
+           ,[rcp_ReceivedYear]
+           --,[rcp_TransferAmount]
+           --,[rcp_YearPart]
+           --,[rcp_AmendmentCode]
+           ,[rcp_Locked]
+           --,[rcp_LockedOn]
+           --,[rcp_FillingId]
+           --,[rcp_FillingDate]
+           --,[rcp_pmt_GUID]
+           --,[rcp_IsValid]
+           --,[rcp_ReceivedBy_GUID]
+           --,[rcp_ReceiptableAmount]
+           --,[rcp_isNonReceiptable]
+           --,[rcp_ReceiptSentDate]
+           )
+     select
+           rcpguid,--(<rcp_GUID, uniqueidentifier,>
+           [Transaction Date],--,<rcp_Date, datetime,>
+           isnull([Donation ID],''),--,<rcp_Check_No, nvarchar(50),>
+           [Gross Amount],--,<rcp_Amount, money,>
+           --,<rcp_InterestRate, decimal(9,6),>
+           '',--,<rcp_Purpose, nvarchar(250),>
+           [Transaction Date],--,<rcp_Deposited, datetime,>
+           [Transaction Date],--,<rcp_Statement, datetime,>
+           '',--,<rcp_Note, ntext,>
+           '',--,<rcp_State, nchar(2),>
+           0,--,<rcp_Reconciled, bit,>
+           0,--,<rcp_ForceItemize, bit,>
+           0,--,<rcp_ForceUnitemize, bit,>
+           perguid,--,<rcp_per_GUID, uniqueidentifier,>
+           rcsguid,--,<rcp_rcs_GUID, uniqueidentifier,>
+           souguid,--,<rcp_sou_GUID, uniqueidentifier,>
+           chsguid,--,<rcp_chs_GUID, uniqueidentifier,>
+           accguid,--,<rcp_acc_GUID, uniqueidentifier,>
+           batguid,--,<rcp_bat_GUID, uniqueidentifier,>
+           '',--,<rcp_FecId, nvarchar(20),>
+           '',--,<rcp_TransId, nvarchar(20),>
+           --,<rcp_rlv_GUID, uniqueidentifier,>
+           --,<rcp_let_GUID_ThankYou, uniqueidentifier,>
+           --,<rcp_let_GUID_Compliance, uniqueidentifier,>
+           --,<rcp_ple_GUID, uniqueidentifier,>
+           --,<rcp_link_GUID, uniqueidentifier,>
+           0,--,<rcp_Deleted, bit,>
+           getdate(),--,<rcp_CreatedOn, datetime,>
+           '00000000-0000-0000-0000-000000000000',--,<rcp_CreatedBy, uniqueidentifier,>
+           --,<rcp_UpdatedOn, datetime,>
+           --,<rcp_UpdatedBy, uniqueidentifier,>
+           --,<rcp_DeletedOn, datetime,>
+           --,<rcp_DeletedBy, uniqueidentifier,>
+           0,--,<rcp_Support, bit,>
+           0,--,<rcp_Oppose, bit,>
+           sourceid,--,<rcp_SourceId, nvarchar(10),>
+           --,<rcp_DueDate, datetime,>
+           --,<rcp_MatchingFundsSequence, bigint,>
+           --,<rcp_receivedDate, datetime,>
+           [Transaction Date],--,<rcp_ReceivedYear, varchar(4),>
+           --,<rcp_TransferAmount, money,>
+           --,<rcp_YearPart, int,>
+           --,<rcp_AmendmentCode, nvarchar(3),>
+           0--,<rcp_Locked, bit,>
+           --,<rcp_LockedOn, datetime,>
+           --,<rcp_FillingId, nvarchar(30),>
+           --,<rcp_FillingDate, datetime,>
+           --,<rcp_pmt_GUID, uniqueidentifier,>
+           --,<rcp_IsValid, bit,>
+           --,<rcp_ReceivedBy_GUID, uniqueidentifier,>
+           --,<rcp_ReceiptableAmount, money,>
+           --,<rcp_isNonReceiptable, bit,>
+           --,<rcp_ReceiptSentDate, datetime,>)
+   from i_stripe_001
+
+  -- link to entities
+insert into std_individual_receipt
+select
+newid(),indguid,rcpguid
+from i_stripe_001 
+
+ update std_receipt
+set rcp_link_guid = linkguid
+from i_stripe_001
+where rcpguid = rcp_guid
+
+--phone correct
+update std_phone 
+set pho_number=CASE LEN(pho_number)WHEN 11 THEN LEFT(pho_number,1)+ STUFF(STUFF(STUFF(pho_number,1,1,' ('),6,0,') '),11,0,'-')
+WHEN 10 THEN STUFF(STUFF(STUFF(pho_number,1,0,' ('),6,0,') '),11,0,'-')
+WHEN 7 THEN STUFF(pho_number,4,0,'-')ELSE pho_number 
+END 
+
+select * from std_phone
+
+delete from std_phone where pho_number=''
+-- Source Ids
+update std_individual set ind_sourceid=ind_reportentityid
+where 1=1
+
+--Truncate table upon insert
+Truncate table i_stripe_001
+
+
+alter table i_stripe_001 drop column indguid,pcmguid,cmpguid,ptyguid,ethguid,racguid,
+occguid,og1guid,og2guid,og3guid,intguid, cloguid ,ictguid,cmtguid, cltguid, iduguid,
+hiadguid, hiatguid, cryguid, emsguid, pemaguid,pemtguid, hphoguid ,hphtguid,erguid, 
+rcsguid, souguid,chsguid, accguid, batguid,rtype, rsubtype, rcpguid ,rctguid ,linkguid,
+ pyear,ptext, actguid ,pcmguid
+
+truncate table [FTPTestLoad2]
+
+drop table [FTPTestLoad2]
